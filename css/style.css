@@ -167,6 +167,10 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .text-btn:hover { border-color: var(--muted); }
 .text-btn:disabled { opacity: 0.5; cursor: default; }
 
+.ast-note { max-width: 760px; margin: 8px auto 0; font-size: 12px; color: #77e0b5; }
+.ast-note:empty { display: none; }
+.ast text { paint-order: stroke; stroke: rgba(7, 6, 13, 0.8); stroke-width: 0.6px; }
+
 /* Timeline */
 .timeline {
   position: relative; max-width: 760px; height: 54px; margin: 14px auto 0;

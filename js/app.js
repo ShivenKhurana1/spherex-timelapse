@@ -1,7 +1,8 @@
 import { resolve, formatRA, formatDec } from './resolve.js';
 import { findExposures, DETECTORS, loadIndex } from './catalog.js';
 import { makeCutout, PIXEL_ARCSEC } from './cutout.js';
-import { tanDeproject, D2R } from './wcs.js';
+import { tanDeproject, tanProject, D2R } from './wcs.js';
+import { knownObjects } from './asteroids.js';
 import { snapToPeak, photometry, renderChart, toCSV } from './lightcurve.js';
 import {
   backgroundSubtract, medianStack, subtract, stretchLimits, paint, paintDiff, paintMotion, median,
@@ -46,6 +47,9 @@ const state = {
   invert: false,
   crosshair: true,
   probe: null,
+  asteroids: false,
+  astMag: 20,
+  astList: null,
   lcPoints: null,
   mask: true,
   maxFrames: 80,
@@ -324,6 +328,7 @@ function draw() {
   updateTimelineMarks();
   updateFilmstripMarks();
   drawLightcurve();
+  requestAsteroids(composite ? null : f);
 }
 
 function drawAll() {
@@ -339,14 +344,75 @@ function drawOverlay() {
     ? `<circle cx="${((state.probe[0] + 0.5) / n) * 100}" cy="${((state.probe[1] + 0.5) / n) * 100}" r="${(3.5 / n) * 100}"
         fill="none" stroke="rgba(255,162,92,0.95)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`
     : '';
-  if (!state.crosshair || !state.target) { svg.innerHTML = probe; return; }
+  const ast = asteroidMarks();
+  if (!state.crosshair || !state.target) { svg.innerHTML = probe + ast; return; }
   const g = 3, l = 6;
-  svg.innerHTML = probe + `
+  svg.innerHTML = ast + probe + `
     <g stroke="rgba(111,211,255,0.85)" stroke-width="0.35" vector-effect="non-scaling-stroke">
       <line x1="${50 - g - l}" y1="50" x2="${50 - g}" y2="50"/><line x1="${50 + g}" y1="50" x2="${50 + g + l}" y2="50"/>
       <line x1="50" y1="${50 - g - l}" x2="50" y2="${50 - g}"/><line x1="50" y1="${50 + g}" x2="50" y2="${50 + g + l}"/>
     </g>`;
 }
+
+// ---------- known asteroids ----------
+
+let astFrame = null;
+function requestAsteroids(frame) {
+  if (!state.asteroids || !frame) {
+    if (state.astList) { state.astList = null; drawOverlay(); }
+    $('astNote').textContent = state.asteroids && !frame ? 'Asteroid labels show on single-date views.' : '';
+    return;
+  }
+  if (astFrame === frame) return;
+  astFrame = frame;
+  state.astList = null;
+  drawOverlay();
+  $('astNote').textContent = 'Checking for known asteroids…';
+  const radius = (state.size * PIXEL_ARCSEC) / 3600 * 0.72;
+  knownObjects(frame.exposures[0].mjd, state.target.ra, state.target.dec, radius)
+    .then(list => {
+      if (astFrame !== frame) return;
+      state.astList = list;
+      drawOverlay();
+    })
+    .catch(() => {
+      if (astFrame === frame) $('astNote').textContent = 'Couldn’t reach the asteroid service (IMCCE SkyBoT).';
+    });
+}
+
+function asteroidMarks() {
+  if (!state.asteroids || !state.astList || !state.target) return '';
+  const n = state.size, half = (n - 1) / 2, s = PIXEL_ARCSEC / 3600;
+  const shown = [];
+  for (const o of state.astList) {
+    if (!(o.vmag <= state.astMag)) continue;
+    const p = tanProject([state.target.ra * D2R, state.target.dec * D2R], o.ra * D2R, o.dec * D2R);
+    if (!p) continue;
+    const i = half - p[0] / D2R / s, j = half - p[1] / D2R / s;
+    if (i < 0 || j < 0 || i > n - 1 || j > n - 1) continue;
+    shown.push({ ...o, x: ((i + 0.5) / n) * 100, y: ((j + 0.5) / n) * 100 });
+  }
+  $('astNote').textContent = shown.length
+    ? `${shown.length} known asteroid${shown.length > 1 ? 's' : ''} brighter than V ${state.astMag} in view (positions: IMCCE SkyBoT).`
+    : `No known asteroids brighter than V ${state.astMag} in view on this date.`;
+  return shown.map(o => `
+    <g class="ast">
+      <circle cx="${o.x}" cy="${o.y}" r="2.2" fill="none" stroke="#77e0b5" stroke-width="1.2" vector-effect="non-scaling-stroke"/>
+      <text x="${o.x + 2.8}" y="${o.y - 1.8}" fill="#77e0b5" font-size="2.6" font-family="Inter, sans-serif">${escapeHtml(o.name)} · V${o.vmag.toFixed(1)}</text>
+    </g>`).join('');
+}
+
+function escapeHtml(t) {
+  return String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+$('asteroids').addEventListener('change', e => {
+  state.asteroids = e.target.checked;
+  astFrame = null;
+  draw();
+  drawOverlay();
+});
+$('astMag').addEventListener('change', e => { state.astMag = Number(e.target.value); drawOverlay(); });
 
 // ---------- light curve ----------
 
