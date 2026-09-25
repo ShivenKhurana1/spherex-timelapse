@@ -11,6 +11,16 @@ fastest way to spot asteroids, comets, high-proper-motion stars and variable sou
 
 No install, no account, no backend. Everything runs in the browser.
 
+## Features
+
+- **Five views:** time-lapse, blink, difference (each date minus the median sky),
+  motion trail (residual light coloured by date), and a deep median stack.
+- **Known asteroids** labelled on each frame, from IMCCE's SkyBoT service.
+- **Light curves:** click any star to plot its brightness at every visit (CSV export).
+- **Bad-pixel masking** from SPHEREx's own FLAGS layer (cosmic rays, hot pixels,
+  persistence), decoded in the browser.
+- Shareable links, PNG and video export, keyboard controls (← → space, `b`, `d`).
+
 ## How it works
 
 1. **Name → coordinates** via the CDS Sesame resolver.
@@ -26,7 +36,10 @@ No install, no account, no backend. Everything runs in the browser.
    under 1 MB).
 4. **Reproject** every cutout onto the same tangent-plane grid centred on the target
    (6.15″ pixels, north up, east left), so stars stay put and moving things move.
-5. **Display** with a shared stretch across all epochs, with background (zodiacal
+5. **Mask** pixels SPHEREx flagged as bad. The FLAGS layer is Rice-compressed one row
+   per tile, so the app range-reads just those rows and decompresses them in
+   JavaScript (checked bit-for-bit against astropy).
+6. **Display** with a shared stretch across all epochs, with background (zodiacal
    light) removed per frame so the sky level doesn't flicker.
 
 ## Running locally
@@ -51,4 +64,5 @@ Standard library only; the first full build takes about an hour.
 ## Data credit
 
 SPHEREx data are provided by NASA/JPL-Caltech and served by the NASA/IPAC Infrared
-Science Archive (IRSA). This project is not affiliated with NASA.
+Science Archive (IRSA). Asteroid positions from IMCCE's SkyBoT; name lookup from
+CDS Sesame. This project is not affiliated with NASA.
