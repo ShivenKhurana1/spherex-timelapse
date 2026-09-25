@@ -102,6 +102,10 @@ async function lookAt(query, opts = {}) {
   $('intro').hidden = true;
   $('workspace').hidden = false;
   stop();
+  if (opts.size) state.size = opts.size;
+  if (opts.mode) state.mode = opts.mode;
+  renderSizes();
+  renderModes();
   state.frames = [];
   state.template = null;
   drawAll();
@@ -125,14 +129,10 @@ async function lookAt(query, opts = {}) {
       renderBands();
       return;
     }
-    if (opts.size) state.size = opts.size;
     const counts = bandCounts();
     if (opts.band && counts[opts.band]) state.band = opts.band;
     else if (!counts[state.band]) state.band = Number(Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0]);
-    if (opts.mode) state.mode = opts.mode;
     renderBands();
-    renderSizes();
-    renderModes();
     loadBand();
   } catch (e) {
     if (e.name === 'AbortError') return;
@@ -632,3 +632,8 @@ function fromHash() {
 renderModes();
 renderSizes();
 fromHash();
+
+loadIndex().then(ix => {
+  const d = new Date(ix.updated);
+  $('stats').textContent = `${ix.total.toLocaleString()} SPHEREx images indexed · updated ${fmtDate(d)}`;
+}).catch(() => {});

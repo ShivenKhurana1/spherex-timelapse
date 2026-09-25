@@ -77,6 +77,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .example:hover { border-color: var(--accent); transform: translateY(-2px); }
 .example strong { display: block; }
 .example span { color: var(--muted); font-size: 13px; }
+.stats { color: var(--muted); font-size: 12px; margin-top: 20px; }
 
 /* Workspace */
 .workspace {
