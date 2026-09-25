@@ -5,19 +5,152 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SPHEREx Time-Lapse</title>
   <meta name="description" content="Watch the sky change in NASA SPHEREx images: time-lapse, blink and difference views of any spot on the sky.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23120f24' stroke='%23ffa25c' stroke-width='2'/%3E%3Ccircle cx='11' cy='13' r='2' fill='%236fd3ff'/%3E%3Ccircle cx='20' cy='19' r='3' fill='%23ffa25c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <header class="top">
-    <div class="brand">
+    <a class="brand" href="./">
       <span class="logo" aria-hidden="true"></span>
-      <div>
-        <h1>SPHEREx Time-Lapse</h1>
-        <p class="tag">See how the infrared sky changes between visits</p>
-      </div>
-    </div>
+      <span>
+        <span class="title">SPHEREx Time-Lapse</span>
+        <span class="tag">Watch the infrared sky change between visits</span>
+      </span>
+    </a>
+    <form id="search" class="search" autocomplete="off">
+      <input id="q" name="q" type="search" placeholder="Object name or RA Dec — e.g. Barnard's Star, M42, 270 66.56" aria-label="Object name or coordinates" required>
+      <button type="submit">Look</button>
+    </form>
+    <button id="settingsBtn" class="icon-btn" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Zm7.4-2.5a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.4a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.4 7.4 0 0 0 1.7 1L11 21h4l.4-2.4a7.4 7.4 0 0 0 1.7-1l2.5 1 2-3.5Z"/></svg>
+    </button>
   </header>
-  <main id="app"></main>
+
+  <section id="intro" class="intro">
+    <h1>Every six months, SPHEREx photographs the whole sky in 102 colours of infrared light.</h1>
+    <p>Stars stay put. Asteroids, comets, nearby stars and variable objects don't. Pick a spot and
+      this tool lines up every SPHEREx picture of it so you can watch what moves.</p>
+    <div class="examples" id="examples"></div>
+  </section>
+
+  <main id="workspace" class="workspace" hidden>
+    <aside class="panel">
+      <div class="target">
+        <div class="target-name" id="targetName">—</div>
+        <div class="target-coords mono" id="targetCoords"></div>
+      </div>
+
+      <fieldset>
+        <legend>Detector band</legend>
+        <div class="bands" id="bands"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>View</legend>
+        <div class="modes" id="modes" role="tablist">
+          <button data-mode="play" role="tab">Time-lapse</button>
+          <button data-mode="blink" role="tab">Blink</button>
+          <button data-mode="diff" role="tab">Difference</button>
+          <button data-mode="motion" role="tab">Motion trail</button>
+          <button data-mode="static" role="tab">Deep stack</button>
+        </div>
+        <p class="hint" id="modeHint"></p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Field of view</legend>
+        <div class="seg" id="sizes">
+          <button data-size="48">5′</button>
+          <button data-size="96">10′</button>
+          <button data-size="160">16′</button>
+          <button data-size="240">25′</button>
+        </div>
+        <label class="check"><input type="checkbox" id="groupDay" checked> Combine exposures from the same day</label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Display</legend>
+        <label class="row">Stretch
+          <select id="stretch">
+            <option value="asinh">asinh</option>
+            <option value="sqrt">square root</option>
+            <option value="log">log</option>
+            <option value="linear">linear</option>
+          </select>
+        </label>
+        <label class="row">Colours
+          <select id="cmap">
+            <option value="gray">grayscale</option>
+            <option value="infrared">infrared</option>
+            <option value="ice">ice</option>
+          </select>
+        </label>
+        <label class="row">Contrast <input type="range" id="contrast" min="0.9" max="0.9995" step="0.0005" value="0.998"></label>
+        <label class="check"><input type="checkbox" id="invert"> Invert (black stars on white)</label>
+        <label class="check"><input type="checkbox" id="crosshair" checked> Show target marker</label>
+      </fieldset>
+    </aside>
+
+    <section class="stage">
+      <div class="viewer" id="viewer">
+        <canvas id="canvas" width="96" height="96"></canvas>
+        <svg class="overlay" id="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+        <div class="hud hud-tl mono" id="hudDate"></div>
+        <div class="hud hud-tr mono" id="hudFrame"></div>
+        <div class="hud hud-bl mono" id="hudCursor"></div>
+        <div class="hud hud-br" id="compass" aria-hidden="true">
+          <svg viewBox="0 0 60 60" width="60" height="60"><path d="M50 50 V14 M50 50 H14" stroke="currentColor" stroke-width="2" fill="none"/><text x="50" y="10" text-anchor="middle">N</text><text x="7" y="54" text-anchor="middle">E</text></svg>
+        </div>
+        <div class="loading" id="loading" hidden><div class="spinner"></div><div id="loadingText">Searching the archive…</div></div>
+      </div>
+
+      <div class="transport">
+        <button id="playBtn" class="play" aria-label="Play">
+          <svg viewBox="0 0 24 24" width="22" height="22" class="i-play"><path fill="currentColor" d="M7 5v14l12-7z"/></svg>
+          <svg viewBox="0 0 24 24" width="22" height="22" class="i-pause"><path fill="currentColor" d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
+        </button>
+        <button id="prevBtn" class="icon-btn" aria-label="Previous frame">‹</button>
+        <button id="nextBtn" class="icon-btn" aria-label="Next frame">›</button>
+        <label class="speed">Speed <input type="range" id="speed" min="1" max="12" value="4"> <span id="speedVal" class="mono">4 fps</span></label>
+        <div class="progress" id="progress"><div id="progressBar"></div></div>
+      </div>
+
+      <div class="timeline" id="timeline" aria-label="Timeline of observations">
+        <div class="axis" id="axis"></div>
+        <div class="ticks" id="ticks"></div>
+      </div>
+      <div class="blink-pick" id="blinkPick" hidden>
+        Blinking <strong id="blinkA">A</strong> ⇄ <strong id="blinkB">B</strong>
+        <span class="hint">— click the timeline to set A, shift-click to set B</span>
+      </div>
+
+      <div class="filmstrip" id="filmstrip"></div>
+    </section>
+  </main>
+
+  <section class="about" id="about">
+    <h2>What am I looking at?</h2>
+    <div class="cards">
+      <article><h3>Time-lapse</h3><p>Every SPHEREx image of this spot, aligned star-on-star and played in date order. Anything that moves or flickers stands out.</p></article>
+      <article><h3>Blink</h3><p>The classic way Clyde Tombaugh found Pluto: flip between two dates and let your eye catch the jump.</p></article>
+      <article><h3>Difference</h3><p>Each frame minus the median of all frames. Unchanging stars vanish; red means brighter than usual, blue means fainter.</p></article>
+      <article><h3>Motion trail</h3><p>All the “extra light” from every date in one picture, coloured by time (purple → red). A moving object leaves a rainbow track.</p></article>
+    </div>
+    <p class="fine">SPHEREx sees each patch of sky through a filter whose colour changes across the detector, so the same star can look slightly brighter or fainter between visits simply because it was seen at a different wavelength. Six detectors (D1–D6) cover 0.75–5 µm. Data: NASA/JPL-Caltech SPHEREx Quick Release, served by <a href="https://irsa.ipac.caltech.edu/Missions/spherex.html">NASA/IPAC IRSA</a>. Name lookup by <a href="https://cds.unistra.fr/">CDS Sesame</a>. Not an official NASA product. <a href="https://github.com/ShivenKhurana1/spherex-timelapse">Source on GitHub</a>.</p>
+  </section>
+
+  <dialog id="settings">
+    <form method="dialog">
+      <h2>Settings</h2>
+      <label>Maximum frames to load
+        <input id="maxFrames" type="number" min="4" max="400" value="80">
+      </label>
+      <div class="dialog-actions"><button value="cancel">Cancel</button><button value="save" class="primary">Save</button></div>
+    </form>
+  </dialog>
+
   <script type="module" src="js/app.js"></script>
 </body>
 </html>
