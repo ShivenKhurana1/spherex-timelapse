@@ -191,6 +191,35 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .thumb small { display: block; font-size: 9px; color: var(--muted); padding: 2px 0; }
 .thumb.current { border-color: var(--accent); }
 
+/* Light curve */
+.lc-invite { max-width: 760px; margin: 10px auto 0; }
+.lightcurve {
+  max-width: 760px; margin: 14px auto 0; padding: 14px 16px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.lc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.lc-head h3 { margin: 0; font-size: 15px; }
+.lc-head .hint { margin-top: 2px; }
+.lc-actions { display: flex; gap: 6px; }
+.lc-wrap { position: relative; margin-top: 6px; }
+#lcSvg { width: 100%; height: auto; display: block; }
+.lc-grid { stroke: var(--line); stroke-width: 1; }
+.lc-axis { stroke: var(--muted); stroke-width: 1; opacity: 0.6; }
+.lc-tick { fill: var(--muted); font: 11px Inter, sans-serif; }
+.lc-err { stroke: var(--muted); stroke-width: 1.5; opacity: 0.7; }
+.lc-dot { fill: var(--accent2); stroke: var(--panel); stroke-width: 2; }
+.lc-pt.cur .lc-dot { fill: var(--accent); }
+.lc-pt:hover .lc-dot { stroke: var(--text); }
+.lc-hit { fill: transparent; cursor: pointer; }
+.lc-tip {
+  position: absolute; pointer-events: none; transform: translate(-50%, calc(-100% - 12px));
+  background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
+  font-size: 12px; white-space: nowrap; color: var(--text);
+}
+.lc-tip span { color: var(--muted); }
+.lc-note { font-size: 13px; color: var(--accent); margin: 6px 0 0; }
+.lc-note:empty { display: none; }
+
 /* About */
 .about { max-width: 1100px; margin: 56px auto; padding: 0 24px; }
 .about h2 { font-size: 22px; }

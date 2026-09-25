@@ -2,6 +2,7 @@ import { resolve, formatRA, formatDec } from './resolve.js';
 import { findExposures, DETECTORS, loadIndex } from './catalog.js';
 import { makeCutout, PIXEL_ARCSEC } from './cutout.js';
 import { tanDeproject, D2R } from './wcs.js';
+import { snapToPeak, photometry, renderChart, toCSV } from './lightcurve.js';
 import {
   backgroundSubtract, medianStack, subtract, stretchLimits, paint, paintDiff, paintMotion, median,
 } from './render.js';
@@ -12,7 +13,7 @@ const EXAMPLES = [
   { name: "Barnard's Star", ra: 269.4464, dec: 4.7673, note: 'Fastest-moving star in the sky — watch it creep north', size: 48 },
   { name: 'Asteroid 4 Vesta', ra: 215.95, dec: -6.76, note: 'Caught crossing the field, July 2025', size: 240, band: 2, mode: 'motion' },
   { name: 'North Ecliptic Pole', ra: 270.0, dec: 66.5607, note: 'SPHEREx deep field: hundreds of visits' },
-  { name: 'Betelgeuse', ra: 88.7929, dec: 7.4071, note: 'Pulsating red supergiant' },
+  { name: 'Crab Nebula', ra: 83.6331, dec: 22.0145, note: 'Wreck of a star that exploded in 1054', size: 160 },
   { name: 'Orion Nebula', ra: 83.8221, dec: -5.3911, note: 'Star nursery glowing in infrared', size: 240 },
   { name: 'Galactic Center', ra: 266.4168, dec: -29.0078, note: 'The crowded heart of the Milky Way' },
   { name: 'South Ecliptic Pole', ra: 90.0, dec: -66.5607, note: 'Second deep field, near the LMC' },
@@ -44,6 +45,8 @@ const state = {
   contrast: 0.998,
   invert: false,
   crosshair: true,
+  probe: null,
+  lcPoints: null,
   mask: true,
   maxFrames: 80,
   limits: [0, 1],
@@ -181,6 +184,8 @@ async function loadBand() {
   state.blinkA = 0;
   state.blinkB = -1;
   state.template = null;
+  state.probe = null;
+  state.lcPoints = null;
   imageData = ctx.createImageData(state.size, state.size);
   canvas.width = canvas.height = state.size;
   ctx.clearRect(0, 0, state.size, state.size);
@@ -244,13 +249,15 @@ function onFrameLoaded(done) {
   if (loaded().length) setLoading('');
   if (refreshQueued) return;
   refreshQueued = true;
-  requestAnimationFrame(() => {
+  // A timer rather than requestAnimationFrame, so loading still refreshes in a background tab.
+  setTimeout(() => {
     refreshQueued = false;
     state.template = null;
+    state.lcPoints = null;
     recomputeLimits();
     if (state.blinkB < 0 || state.blinkB >= loaded().length) state.blinkB = loaded().length - 1;
     drawAll();
-  });
+  }, 60);
 }
 
 // ---------- rendering ----------
@@ -316,6 +323,7 @@ function draw() {
   }
   updateTimelineMarks();
   updateFilmstripMarks();
+  drawLightcurve();
 }
 
 function drawAll() {
@@ -326,14 +334,100 @@ function drawAll() {
 
 function drawOverlay() {
   const svg = $('overlay');
-  if (!state.crosshair || !state.target) { svg.innerHTML = ''; return; }
+  const n = state.size;
+  const probe = state.probe
+    ? `<circle cx="${((state.probe[0] + 0.5) / n) * 100}" cy="${((state.probe[1] + 0.5) / n) * 100}" r="${(3.5 / n) * 100}"
+        fill="none" stroke="rgba(255,162,92,0.95)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`
+    : '';
+  if (!state.crosshair || !state.target) { svg.innerHTML = probe; return; }
   const g = 3, l = 6;
-  svg.innerHTML = `
+  svg.innerHTML = probe + `
     <g stroke="rgba(111,211,255,0.85)" stroke-width="0.35" vector-effect="non-scaling-stroke">
       <line x1="${50 - g - l}" y1="50" x2="${50 - g}" y2="50"/><line x1="${50 + g}" y1="50" x2="${50 + g + l}" y2="50"/>
       <line x1="50" y1="${50 - g - l}" x2="50" y2="${50 - g}"/><line x1="50" y1="${50 + g}" x2="50" y2="${50 + g + l}"/>
     </g>`;
 }
+
+// ---------- light curve ----------
+
+function lightcurvePoints() {
+  if (!state.probe) return [];
+  if (!state.lcPoints) {
+    const n = state.size;
+    state.lcPoints = [];
+    state.lcSaturated = 0;
+    loaded().forEach((f, i) => {
+      const p = photometry(f.data, n, state.probe[0], state.probe[1], f.sigma);
+      if (p?.saturated) state.lcSaturated++;
+      else if (p) state.lcPoints.push({ ...p, mjd: f.mjd, date: f.date, i });
+    });
+  }
+  return state.lcPoints;
+}
+
+function drawLightcurve() {
+  $('lc').hidden = !state.probe;
+  $('lcInvite').hidden = !!state.probe || !loaded().length;
+  if (!state.probe) return;
+  const composite = state.mode === 'motion' || state.mode === 'static';
+  const cur = composite ? -1 : loaded().indexOf(currentFrame());
+  const pts = lightcurvePoints();
+  renderChart($('lcSvg'), pts, cur, fmtDate);
+  const sat = state.lcSaturated;
+  $('lcNote').textContent = !pts.length && sat
+    ? 'This star is too bright: it saturates SPHEREx’s detector, so its brightness can’t be measured.'
+    : !pts.length ? 'Not enough clean data around this point to measure it.'
+    : sat ? `${sat} visit${sat > 1 ? 's' : ''} skipped: pixels at the star’s centre were blank (saturated or flagged as bad).` : '';
+}
+
+function setProbe(i, j) {
+  const n = state.size;
+  const t = getTemplate();
+  state.probe = t ? snapToPeak(t, n, i, j) : [i, j];
+  state.lcPoints = null;
+  const s = (PIXEL_ARCSEC / 3600) * D2R, half = (n - 1) / 2;
+  const [ra, dec] = tanDeproject([state.target.ra * D2R, state.target.dec * D2R], -(state.probe[0] - half) * s, (half - state.probe[1]) * s);
+  $('lcWhere').textContent = `${formatRA(ra)} ${formatDec(dec)} · ${DETECTORS[state.band].name} · aperture 15″ radius`;
+  drawOverlay();
+  drawLightcurve();
+}
+
+$('viewer').addEventListener('click', e => {
+  if (!loaded().length) return;
+  const r = canvas.getBoundingClientRect(), n = state.size;
+  const i = Math.floor(((e.clientX - r.left) / r.width) * n);
+  const j = Math.floor(((e.clientY - r.top) / r.height) * n);
+  if (i >= 0 && j >= 0 && i < n && j < n) setProbe(i, j);
+});
+
+$('lcClear').addEventListener('click', () => { state.probe = null; state.lcPoints = null; drawOverlay(); drawLightcurve(); });
+
+$('lcCsv').addEventListener('click', () => {
+  download(new Blob([toCSV(lightcurvePoints())], { type: 'text/csv' }), 'csv');
+});
+
+$('lcSvg').addEventListener('mousemove', e => {
+  const g = e.target.closest('.lc-pt');
+  const tip = $('lcTip');
+  if (!g) { tip.hidden = true; return; }
+  const p = lightcurvePoints()[Number(g.dataset.k)];
+  const dot = g.querySelector('.lc-dot').getBoundingClientRect();
+  const wrap = $('lcSvg').parentElement.getBoundingClientRect();
+  tip.innerHTML = `${fmtDateTime(p.date)}<br>${p.flux.toFixed(2)} <span>± ${p.err.toFixed(2)} mJy</span>`;
+  tip.style.left = `${dot.left + dot.width / 2 - wrap.left}px`;
+  tip.style.top = `${dot.top - wrap.top}px`;
+  tip.hidden = false;
+});
+$('lcSvg').addEventListener('mouseleave', () => { $('lcTip').hidden = true; });
+$('lcSvg').addEventListener('click', e => {
+  const g = e.target.closest('.lc-pt');
+  if (!g) return;
+  stop();
+  if (state.mode === 'motion' || state.mode === 'static') setMode('play');
+  if (state.mode === 'blink') setMode('play');
+  state.idx = lightcurvePoints()[Number(g.dataset.k)].i;
+  draw();
+});
 
 // ---------- timeline & filmstrip ----------
 
@@ -419,7 +513,14 @@ function updateFilmstripMarks() {
   const cur = loaded().indexOf(currentFrame());
   for (const b of $('filmstrip').children) {
     const on = Number(b.dataset.i) === cur;
-    if (on && !b.classList.contains('current') && state.playing) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (on && !b.classList.contains('current') && state.playing) {
+      // Scroll only the strip sideways; scrollIntoView would also jump the page.
+      const strip = $('filmstrip');
+      const left = b.offsetLeft - strip.offsetLeft;
+      if (left < strip.scrollLeft || left + b.offsetWidth > strip.scrollLeft + strip.clientWidth) {
+        strip.scrollLeft = left - strip.clientWidth / 2 + b.offsetWidth / 2;
+      }
+    }
     b.classList.toggle('current', on);
   }
 }
