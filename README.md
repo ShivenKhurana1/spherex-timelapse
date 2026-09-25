@@ -1,5 +1,7 @@
 # SPHEREx Time-Lapse
 
+**Live:** http://gradepeach.me/spherex-timelapse/
+
 A public web tool for watching the sky change in NASA SPHEREx images.
 
 Type an object name or coordinates, pick a detector band, and the app gathers every
