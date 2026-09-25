@@ -44,6 +44,7 @@ const state = {
   contrast: 0.998,
   invert: false,
   crosshair: true,
+  mask: true,
   maxFrames: 80,
   limits: [0, 1],
   template: null,
@@ -199,7 +200,7 @@ async function loadBand() {
       try {
         const cuts = [];
         for (const e of frame.exposures) {
-          const c = await makeCutout(e, ra, dec, size, abort.signal);
+          const c = await makeCutout(e, ra, dec, size, abort.signal, { mask: state.mask });
           if (!c.offImage) cuts.push(c.data);
         }
         if (!cuts.length) { frame.status = 'off'; continue; }
@@ -581,6 +582,7 @@ $('sizes').addEventListener('click', e => {
   if (state.exposures.length) loadBand();
 });
 
+$('mask').addEventListener('change', e => { state.mask = e.target.checked; if (state.exposures.length) loadBand(); });
 $('groupDay').addEventListener('change', e => { state.group = e.target.checked; if (state.exposures.length) loadBand(); });
 
 for (const id of ['stretch', 'cmap']) {

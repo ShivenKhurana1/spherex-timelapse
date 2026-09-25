@@ -89,3 +89,96 @@ export async function readRows(url, info, y0, y1, signal) {
   for (let i = 0; i < out.length; i++) out[i] = view.getFloat32(i * 4, false);
   return { y0, y1, width: info.width, data: out };
 }
+
+// ---------- FLAGS extension (tile-compressed, RICE_1, one tile per row) ----------
+
+// Bit planes we treat as bad data. Deliberately NOT masked: OVERFLOW/NONLINEAR
+// (would punch holes in bright stars and asteroids), STREAK (could hide fast
+// movers), SOURCE and GHOST* (informational).
+export const BAD_FLAGS =
+  (1 << 0) | (1 << 2) | (1 << 6) | (1 << 9) | (1 << 10) | (1 << 11) |
+  (1 << 17) | (1 << 19) | (1 << 27) | (1 << 28);
+
+// Header + the whole row-descriptor table usually fit in one ~34 KB read.
+export async function readFlagsInfo(url, info, signal) {
+  let bytes = await fetchRange(url, info.nextHduStart, info.nextHduStart + BLOCK * 14 - 1, signal);
+  let hdr = parseHeader(bytes, 0);
+  if (!hdr) throw new Error('FLAGS header too long');
+  const h = hdr.header;
+  if (h.EXTNAME !== 'FLAGS' || h.ZCMPTYPE !== 'RICE_1' || h.ZTILE2 !== 1) return null;
+  const tableBytes = h.NAXIS1 * h.NAXIS2;
+  if (bytes.length < hdr.dataStart + tableBytes) {
+    bytes = await fetchRange(url, info.nextHduStart, info.nextHduStart + hdr.dataStart + tableBytes - 1, signal);
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset + hdr.dataStart, tableBytes);
+  const desc = new Int32Array(h.NAXIS2 * 2);
+  for (let r = 0; r < h.NAXIS2; r++) {
+    desc[2 * r] = view.getInt32(r * h.NAXIS1, false);       // compressed bytes
+    desc[2 * r + 1] = view.getInt32(r * h.NAXIS1 + 4, false); // heap offset
+  }
+  return {
+    width: h.ZNAXIS1,
+    desc,
+    heapStart: info.nextHduStart + hdr.dataStart + (h.THEAP ?? tableBytes),
+    blocksize: 32,
+  };
+}
+
+export async function readFlagRows(url, flags, y0, y1, signal) {
+  const { desc, width } = flags;
+  let lo = Infinity, hi = -Infinity;
+  for (let r = y0; r <= y1; r++) {
+    lo = Math.min(lo, desc[2 * r + 1]);
+    hi = Math.max(hi, desc[2 * r + 1] + desc[2 * r]);
+  }
+  const heap = await fetchRange(url, flags.heapStart + lo, flags.heapStart + hi - 1, signal);
+  const out = new Int32Array((y1 - y0 + 1) * width);
+  for (let r = y0; r <= y1; r++) {
+    const off = desc[2 * r + 1] - lo;
+    riceDecode32(heap.subarray(off, off + desc[2 * r]), out.subarray((r - y0) * width, (r - y0 + 1) * width), flags.blocksize);
+  }
+  return out;
+}
+
+// Port of cfitsio's fits_rdecomp for 4-byte pixels.
+export function riceDecode32(c, out, nblock) {
+  const FSBITS = 5, FSMAX = 25, BBITS = 32;
+  let pos = 4;
+  let lastpix = ((c[0] << 24) | (c[1] << 16) | (c[2] << 8) | c[3]) | 0;
+  let b = c[pos++] | 0;  // bit buffer
+  let nbits = 8;         // bits remaining in b
+  const n = out.length;
+  for (let i = 0; i < n;) {
+    nbits -= FSBITS;
+    while (nbits < 0) { b = (b << 8) | c[pos++]; nbits += 8; }
+    const fs = ((b >>> nbits) & ((1 << FSBITS) - 1)) - 1;
+    b &= (1 << nbits) - 1;
+    const imax = Math.min(i + nblock, n);
+    if (fs < 0) {
+      for (; i < imax; i++) out[i] = lastpix;
+    } else if (fs === FSMAX) {
+      for (; i < imax; i++) {
+        let k = BBITS - nbits;
+        let diff = (b << k) >>> 0;
+        for (k -= 8; k >= 0; k -= 8) { b = c[pos++]; diff = (diff | (b << k)) >>> 0; }
+        if (nbits > 0) { b = c[pos++]; diff = (diff | (b >>> (-k))) >>> 0; b &= (1 << nbits) - 1; } else b = 0;
+        const d = diff & 1 ? ~(diff >>> 1) : diff >>> 1;
+        out[i] = lastpix = (d + lastpix) | 0;
+      }
+    } else {
+      for (; i < imax; i++) {
+        while (b === 0) { nbits += 8; b = c[pos++]; }
+        const nzero = nbits - (31 - Math.clz32(b)) - 1;
+        nbits -= nzero + 1;
+        b ^= 1 << nbits;
+        nbits -= fs;
+        while (nbits < 0) { b = (b << 8) | c[pos++]; nbits += 8; }
+        const diff = ((nzero << fs) | (b >>> nbits)) >>> 0;
+        b &= (1 << nbits) - 1;
+        const d = diff & 1 ? ~(diff >>> 1) : diff >>> 1;
+        out[i] = lastpix = (d + lastpix) | 0;
+      }
+    }
+  }
+  return out;
+}

@@ -1,10 +1,20 @@
 // Build aligned, north-up cutouts from SPHEREx exposures.
 
-import { readImageHeader, readRows } from './fits.js';
+import { readImageHeader, readRows, readFlagsInfo, readFlagRows, BAD_FLAGS } from './fits.js';
 import { WCS, tanDeproject, D2R } from './wcs.js';
 
 export const PIXEL_ARCSEC = 6.15;
 const headerCache = new Map();
+const flagsCache = new Map();
+
+function getFlagsInfo(url, info, signal) {
+  if (!flagsCache.has(url)) {
+    const p = readFlagsInfo(url, info, signal);
+    flagsCache.set(url, p);
+    p.catch(() => flagsCache.delete(url));
+  }
+  return flagsCache.get(url);
+}
 
 async function getHeader(url, signal) {
   if (!headerCache.has(url)) {
@@ -39,7 +49,7 @@ function cachedGrid(ra, dec, size, scale) {
 }
 
 // Returns { data: Float32Array(size*size), valid } or { offImage: true }.
-export async function makeCutout(exposure, ra, dec, size, signal, scale = PIXEL_ARCSEC) {
+export async function makeCutout(exposure, ra, dec, size, signal, { mask = true, scale = PIXEL_ARCSEC } = {}) {
   const info = await getHeader(exposure.url, signal);
   const { wcs, width, height } = info;
   const c = wcs.skyToPix(ra, dec);
@@ -60,7 +70,17 @@ export async function makeCutout(exposure, ra, dec, size, signal, scale = PIXEL_
   const y1 = Math.min(height - 1, Math.ceil(ymax) + 1);
   if (y0 > y1) return { offImage: true };
 
-  const rows = await readRows(exposure.url, info, y0, y1, signal);
+  const [rows, flags] = await Promise.all([
+    readRows(exposure.url, info, y0, y1, signal),
+    mask ? getFlagsInfo(exposure.url, info, signal)
+      .then(fi => fi && readFlagRows(exposure.url, fi, y0, y1, signal))
+      .catch(e => { console.warn('flags unavailable', e); return null; }) : null,
+  ]);
+  if (flags) {
+    // Bad pixels become NaN; bilinear() then falls back to good neighbours.
+    const d = rows.data;
+    for (let i = 0; i < d.length; i++) if (flags[i] & BAD_FLAGS) d[i] = NaN;
+  }
   const out = new Float32Array(size * size);
   let valid = 0;
   for (let k = 0; k < size * size; k++) {
@@ -78,10 +98,10 @@ function bilinear(rows, x, y, w, h) {
   const x1 = Math.min(x0 + 1, w - 1), y1 = Math.min(y0 + 1, h - 1);
   const fx = x - x0, fy = y - y0;
   const d = rows.data;
-  const a = d[y0 * w + x0], b = d[y0 * w + x1], c = d[y1 * w + x0], e = d[y1 * w + x1];
-  // If a neighbour is bad, fall back to nearest pixel.
-  if (!(a === a && b === b && c === c && e === e)) {
-    return d[Math.round(y) * w + Math.round(x)];
-  }
-  return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + e * fx) * fy;
+  const v = [d[y0 * w + x0], d[y0 * w + x1], d[y1 * w + x0], d[y1 * w + x1]];
+  const wt = [(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy];
+  // Weight only the good neighbours, so a masked pixel doesn't leave a hole.
+  let s = 0, ws = 0;
+  for (let i = 0; i < 4; i++) if (v[i] === v[i]) { s += v[i] * wt[i]; ws += wt[i]; }
+  return ws > 0.05 ? s / ws : NaN;
 }
