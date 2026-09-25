@@ -115,15 +115,17 @@ export function paintDiff(imageData, data, limit) {
 
 // Colour-by-time composite of positive residuals: moving objects show up as a
 // rainbow trail (purple = earliest, red = latest); static stars cancel out.
-export function paintMotion(imageData, residuals, sigmas, threshold = 3) {
+export function paintMotion(imageData, residuals, sigmas, threshold = 5) {
   const px = imageData.data;
   const n = residuals[0].length;
   const acc = new Float32Array(n * 3);
   const wsum = new Float32Array(n);
   const T = residuals.length;
-  residuals.forEach((r, t) => {
+  const size = Math.round(Math.sqrt(n));
+  residuals.forEach((raw, t) => {
     const [cr, cg, cb] = hue(T === 1 ? 0 : t / (T - 1));
-    const s = sigmas[t] || 1;
+        const r = medianFilter(raw, size);
+    const s = robustSigma(r) || sigmas[t] || 1;
     for (let i = 0; i < n; i++) {
       const z = r[i] / s;
       if (!(z > threshold)) continue;
@@ -138,6 +140,35 @@ export function paintMotion(imageData, residuals, sigmas, threshold = 3) {
     px[4 * i] = 8 + acc[3 * i] * b; px[4 * i + 1] = 8 + acc[3 * i + 1] * b; px[4 * i + 2] = 14 + acc[3 * i + 2] * b;
     px[4 * i + 3] = 255;
   }
+}
+
+function robustSigma(d) {
+  const a = [];
+  for (let i = 0; i < d.length; i += 3) if (d[i] === d[i]) a.push(Math.abs(d[i]));
+  return 1.4826 * median(a);
+}
+
+// 3x3 median: removes isolated spikes (cosmic rays, hot pixels), keeps real sources.
+function medianFilter(d, w) {
+  const out = new Float32Array(d.length);
+  const buf = new Float32Array(9);
+  for (let y = 0; y < w; y++) {
+    for (let x = 0; x < w; x++) {
+      let m = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= w) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          const v = d[yy * w + xx];
+          if (v === v) buf[m++] = v;
+        }
+      }
+      out[y * w + x] = m ? buf.subarray(0, m).sort()[m >> 1] : NaN;
+    }
+  }
+  return out;
 }
 
 export function hue(t) {

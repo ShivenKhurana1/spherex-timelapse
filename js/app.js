@@ -10,6 +10,7 @@ const $ = id => document.getElementById(id);
 
 const EXAMPLES = [
   { name: "Barnard's Star", ra: 269.4464, dec: 4.7673, note: 'Fastest-moving star in the sky — watch it creep north', size: 48 },
+  { name: 'Asteroid 4 Vesta', ra: 215.95, dec: -6.76, note: 'Caught crossing the field, July 2025', size: 240, band: 2, mode: 'motion' },
   { name: 'North Ecliptic Pole', ra: 270.0, dec: 66.5607, note: 'SPHEREx deep field: hundreds of visits' },
   { name: 'Betelgeuse', ra: 88.7929, dec: 7.4071, note: 'Pulsating red supergiant' },
   { name: 'Orion Nebula', ra: 83.8221, dec: -5.3911, note: 'Star nursery glowing in infrared', size: 240 },
