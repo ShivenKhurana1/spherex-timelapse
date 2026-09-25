@@ -455,6 +455,80 @@ function step(d) {
   draw();
 }
 
+// ---------- export ----------
+
+const EXPORT_PX = 720;
+
+function exportCanvas() {
+  const c = document.createElement('canvas');
+  c.width = c.height = EXPORT_PX;
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  return [c, g];
+}
+
+function stamp(g) {
+  g.drawImage(canvas, 0, 0, EXPORT_PX, EXPORT_PX);
+  g.font = '500 20px Inter, sans-serif';
+  g.fillStyle = 'rgba(7,6,13,0.7)';
+  const label = $('hudDate').textContent;
+  g.fillRect(12, 12, g.measureText(label).width + 20, 34);
+  g.fillStyle = '#ece9ff';
+  g.fillText(label, 22, 36);
+  g.font = '13px Inter, sans-serif';
+  g.fillStyle = 'rgba(236,233,255,0.75)';
+  const credit = `SPHEREx ${DETECTORS[state.band].name} · ${state.target.name || ''} · NASA/JPL-Caltech/IPAC`;
+  g.fillText(credit, 14, EXPORT_PX - 14);
+}
+
+function download(blob, ext) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `spherex-${(state.target.name || 'sky').replace(/\W+/g, '-').toLowerCase()}-${DETECTORS[state.band].name}.${ext}`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+$('pngBtn').addEventListener('click', () => {
+  if (!loaded().length) return;
+  const [c, g] = exportCanvas();
+  stamp(g);
+  c.toBlob(b => download(b, 'png'));
+});
+
+$('videoBtn').addEventListener('click', async () => {
+  const fr = loaded();
+  if (fr.length < 2 || !window.MediaRecorder) { toast('Video export needs at least two frames and a modern browser.'); return; }
+  const btn = $('videoBtn');
+  btn.disabled = true;
+  stop();
+  const mode = state.mode === 'motion' || state.mode === 'static' ? 'play' : state.mode;
+  if (mode !== state.mode) setMode(mode);
+  const [c, g] = exportCanvas();
+  const mime = ['video/mp4;codecs=avc1', 'video/webm;codecs=vp9', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m));
+  const rec = new MediaRecorder(c.captureStream(30), { mimeType: mime, videoBitsPerSecond: 6e6 });
+  const chunks = [];
+  rec.ondataavailable = e => chunks.push(e.data);
+  const done = new Promise(r => { rec.onstop = r; });
+  rec.start();
+  const steps = mode === 'blink' ? 8 : fr.length;
+  const saved = [state.idx, state.blinkPhase];
+  for (let i = 0; i < steps; i++) {
+    btn.textContent = `${Math.round((100 * i) / steps)}%`;
+    if (mode === 'blink') state.blinkPhase = i % 2; else state.idx = i;
+    draw();
+    stamp(g);
+    await new Promise(r => setTimeout(r, 1000 / (mode === 'blink' ? Math.max(1, state.fps / 2) : state.fps)));
+  }
+  rec.stop();
+  await done;
+  [state.idx, state.blinkPhase] = saved;
+  draw();
+  btn.textContent = 'Video';
+  btn.disabled = false;
+  download(new Blob(chunks, { type: mime }), mime.startsWith('video/mp4') ? 'mp4' : 'webm');
+});
+
 // ---------- controls ----------
 
 function renderBands() {

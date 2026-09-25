@@ -160,6 +160,12 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .progress { flex: 1; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
 .progress div { height: 100%; width: 0; background: var(--accent2); transition: width .2s; }
 
+.text-btn {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 12px;
+}
+.text-btn:hover { border-color: var(--muted); }
+.text-btn:disabled { opacity: 0.5; cursor: default; }
+
 /* Timeline */
 .timeline {
   position: relative; max-width: 760px; height: 54px; margin: 14px auto 0;
