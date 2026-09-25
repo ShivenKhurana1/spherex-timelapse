@@ -71,6 +71,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .intro p { color: var(--muted); font-size: 17px; max-width: 640px; margin: 0 auto 28px; }
 .examples { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; text-align: left; }
 .example {
+  text-align: left;
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 14px 16px; transition: border-color .15s, transform .15s;
 }
@@ -230,4 +231,7 @@ dialog input[type=text], dialog input[type=number] {
   .intro { margin-top: 32px; padding: 0 16px; }
   .about { padding: 0 16px; }
   .speed span { display: none; }
+  .speed input { width: 70px; }
+  .transport { flex-wrap: wrap; }
+  .progress { order: 5; flex-basis: 100%; }
 }
