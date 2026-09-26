@@ -92,7 +92,13 @@ export function findChanges(frames, template, w) {
         if (base < NEW_FRAC * flux) kind = 'new';
         else if (flux > BRIGHT_FRAC * base) kind = 'brightened';
         if (!kind) continue;
-        const c = { frame: fi, x, y, snr: v / s, kind, flux, base };
+        // Sub-pixel centroid (3x3, positive residual only) for measuring motion.
+        let sx = 0, sy = 0, sw = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const q = r[(y + dy) * w + x + dx];
+          if (q > 0) { sx += q * dx; sy += q * dy; sw += q; }
+        }
+        const c = { frame: fi, x, y, cx: x + sx / sw, cy: y + sy / sw, snr: v / s, kind, flux, base };
         if (f.parts) {
           // Real sources show up in every exposure of the visit; a cosmic ray
           // or satellite glint shows up in one.
@@ -138,5 +144,125 @@ export function crop(d, w, x, y, half = 8) {
       out[j * n + i] = xx < 0 || yy < 0 || xx >= w || yy >= w ? NaN : d[yy * w + xx];
     }
   }
+  return out;
+}
+
+// ---------- linking detections into moving-object tracklets ----------
+
+const LINK_TOL = 2.5;       // px: how far a detection may sit from the straight-line path
+const MIN_MOVE = 3;        // px of total motion; less can't be told apart from a stationary source
+const MAX_SPAN = 30;        // days
+
+function fitLine(pts) {
+  // Least squares x(t), y(t) = a + b·t; returns velocity and RMS residual.
+  const n = pts.length, mt = pts.reduce((s, p) => s + p.t, 0) / n;
+  const mx = pts.reduce((s, p) => s + p.x, 0) / n, my = pts.reduce((s, p) => s + p.y, 0) / n;
+  const stt = pts.reduce((s, p) => s + (p.t - mt) ** 2, 0) || 1e-12;
+  const vx = pts.reduce((s, p) => s + (p.t - mt) * (p.x - mx), 0) / stt;
+  const vy = pts.reduce((s, p) => s + (p.t - mt) * (p.y - my), 0) / stt;
+  const rms = Math.sqrt(pts.reduce((s, p) => s + (p.x - (mx + vx * (p.t - mt))) ** 2 + (p.y - (my + vy * (p.t - mt))) ** 2, 0) / n);
+  return { vx, vy, rms, t0: mt, x0: mx, y0: my };
+}
+
+// Greedy linking: try every pair as a seed, collect detections on the implied
+// path (at most one per time), keep the longest paths first.
+function link(dets, { minPoints, minMove, maxSpan, tol }) {
+  const used = new Set();
+  const tracks = [];
+  const seeds = [];
+  for (let i = 0; i < dets.length; i++) {
+    for (let j = i + 1; j < dets.length; j++) {
+      const a = dets[i], b = dets[j];
+      const dt = b.t - a.t;
+      if (a.group === b.group || dt <= 0 || dt > maxSpan) continue;
+      seeds.push([a, b]);
+    }
+  }
+  const candidates = [];
+  for (const [a, b] of seeds) {
+    const dt = b.t - a.t;
+    const vx = (b.x - a.x) / dt, vy = (b.y - a.y) / dt;
+    const members = new Map();
+    for (const c of dets) {
+      if (Math.abs(c.t - a.t) > maxSpan) continue;
+      const px = a.x + vx * (c.t - a.t), py = a.y + vy * (c.t - a.t);
+      const d = Math.hypot(c.x - px, c.y - py);
+      if (d > tol) continue;
+      const prev = members.get(c.group);
+      if (!prev || d < prev.d) members.set(c.group, { c, d });
+    }
+    if (members.size < minPoints) continue;
+    const pts = [...members.values()].map(m => m.c).sort((p, q) => p.t - q.t);
+    const fit = fitLine(pts);
+    const move = Math.hypot(fit.vx, fit.vy) * (pts.at(-1).t - pts[0].t);
+    if (move < minMove || fit.rms > tol / 1.5) continue;
+    candidates.push({ pts, fit });
+  }
+  candidates.sort((p, q) => q.pts.length - p.pts.length || p.fit.rms - q.fit.rms);
+  for (const cand of candidates) {
+    if (cand.pts.some(p => used.has(p))) continue;
+    cand.pts.forEach(p => used.add(p));
+    tracks.push(cand);
+  }
+  return tracks;
+}
+
+// Slow movers seen on several visits. changes: output of findChanges (non-glitch
+// "new" sources); frames: the loaded frames (for times).
+export function linkAcrossVisits(changes, frames) {
+  const dets = changes
+    // "Brightened" counts too: a mover passing over a faint star looks like one.
+    .filter(c => !c.glitch)
+    .map(c => ({ x: c.cx ?? c.x, y: c.cy ?? c.y, t: frames[c.frame].mjd, group: c.frame, change: c }));
+  return link(dets, { minPoints: 3, minMove: MIN_MOVE, maxSpan: MAX_SPAN, tol: LINK_TOL })
+    .map(tr => ({ kind: 'slow', ...tr, changes: tr.pts.map(p => p.change) }));
+}
+
+// Fast movers within one visit: detect in each exposure separately and link
+// detections that step along a line in time order. frame.parts[k] is exposure k
+// (background-subtracted) taken at frame.partTimes[k].
+export function linkWithinVisits(frames, template, w) {
+  const out = [];
+  frames.forEach((f, fi) => {
+    if (!f.parts || f.parts.length < 3) return;
+    const dets = [];
+    f.parts.forEach((part, k) => {
+      const res = new Float32Array(w * w);
+      for (let i = 0; i < res.length; i++) res[i] = part[i] - template[i];
+      const r = median3(res, w);
+      const s = robustSigma(r);
+      for (let y = EDGE; y < w - EDGE; y++) {
+        for (let x = EDGE; x < w - EDGE; x++) {
+          const v = r[y * w + x];
+          if (!(v > THRESH * s)) continue;
+          let isMax = true;
+          for (let dy = -2; dy <= 2 && isMax; dy++) for (let dx = -2; dx <= 2; dx++) if ((dx || dy) && r[(y + dy) * w + x + dx] > v) { isMax = false; break; }
+          if (!isMax) continue;
+          let npix = 0;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (r[(y + dy) * w + x + dx] > 3 * s) npix++;
+          if (npix < 3) continue;
+          dets.push({ x, y, t: f.partTimes[k], group: k, snr: v / s });
+        }
+      }
+    });
+    if (dets.length > 150) return; // a crowded or artifact-ridden visit; linking would be noise
+    // Peak positions jitter by a pixel, so demand clear motion across the visit,
+    // and that each spot is empty in the visit's other exposures: a real fast
+    // mover leaves its earlier positions behind, a stationary source doesn't.
+    const vacated = (d, others) => {
+      const at = img => {
+        let s = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) s += (img[(d.y + dy) * w + d.x + dx] - template[(d.y + dy) * w + d.x + dx]) || 0;
+        return s;
+      };
+      const here = at(f.parts[d.group]);
+      return others.every(k => at(f.parts[k]) < 0.3 * here);
+    };
+    for (const tr of link(dets, { minPoints: 3, minMove: 4, maxSpan: 1, tol: 1.5 })) {
+      const groups = tr.pts.map(p => p.group);
+      if (!tr.pts.every(p => vacated(p, groups.filter(g => g !== p.group)))) continue;
+      out.push({ kind: 'fast', ...tr, frame: fi });
+    }
+  });
   return out;
 }

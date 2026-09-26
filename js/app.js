@@ -5,7 +5,7 @@ import { makeCutout, PIXEL_ARCSEC } from './cutout.js';
 import { tanDeproject, tanProject, D2R } from './wcs.js';
 import { knownObjects } from './asteroids.js';
 import { wavelengthAt } from './wave.js';
-import { findChanges, crop } from './detect.js';
+import { findChanges, crop, linkAcrossVisits, linkWithinVisits } from './detect.js';
 import { snapToPeak, photometry, renderChart, toCSV, renderSpectrum, spectrumCSV, colourCorrect } from './lightcurve.js';
 import {
   backgroundSubtract, medianStack, subtract, stretchLimits, paint, paintDiff, paintMotion, median,
@@ -67,6 +67,8 @@ const state = {
   spec: null,
   track: null,
   changes: null,
+  tracks: null,
+  markTrack: null,
   chFilter: 'unknown',
   mark: null,
   asteroids: false,
@@ -272,7 +274,9 @@ async function loadBand() {
   state.spec?.abort.abort();
   state.spec = null;
   state.changes = null;
+  state.tracks = null;
   state.mark = null;
+  state.markTrack = null;
   renderChanges();
   imageData = ctx.createImageData(state.size, state.size);
   canvas.width = canvas.height = state.size;
@@ -290,7 +294,6 @@ async function loadBand() {
   // Finish a frame once all its exposures are in.
   const finish = frame => {
     const cuts = frame.cuts.filter(Boolean);
-    delete frame.cuts;
     if (!cuts.length) {
       frame.status = frame.failed ? 'error' : 'off';
     } else {
@@ -305,10 +308,12 @@ async function loadBand() {
       // Keep the individual exposures so the change scan can reject
       // one-exposure glitches (cosmic rays, satellite glints).
       frame.parts = cuts.length > 1 ? cuts.map(c => backgroundSubtract(c).data) : null;
+      frame.partTimes = frame.parts ? frame.exposures.filter((_, k) => frame.cuts[k]).map(e => e.mjd) : null;
       const lams = (frame.lams || []).filter(v => v > 0);
       frame.lam = lams.length ? lams.reduce((a, b) => a + b, 0) / lams.length : null;
       frame.status = 'ok';
     }
+    delete frame.cuts;
     done++;
     onFrameLoaded(done);
   };
@@ -451,7 +456,7 @@ function draw() {
   updateFilmstripMarks();
   drawLightcurve();
   requestAsteroids(composite ? null : f);
-  if (state.mark) drawOverlay();
+  if (state.mark || state.markTrack) drawOverlay();
 }
 
 // full=false (while loading) only paints thumbnails for newly arrived frames.
@@ -468,7 +473,7 @@ function drawOverlay() {
     ? `<circle cx="${((state.probe[0] + 0.5) / n) * 100}" cy="${((state.probe[1] + 0.5) / n) * 100}" r="${(3.5 / n) * 100}"
         fill="none" stroke="rgba(255,162,92,0.95)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`
     : '';
-  const ast = asteroidMarks() + (state.mark && currentFrame() === state.mark.frameRef
+  const ast = asteroidMarks() + trackOverlay() + (state.mark && currentFrame() === state.mark.frameRef
     ? `<circle cx="${((state.mark.x + 0.5) / n) * 100}" cy="${((state.mark.y + 0.5) / n) * 100}" r="${(5 / n) * 100}"
         fill="none" stroke="#ff6b6b" stroke-width="1.5" stroke-dasharray="3 2" vector-effect="non-scaling-stroke"/>`
     : '');
@@ -558,12 +563,20 @@ async function scanChanges() {
   const found = findChanges(fr, getTemplate(), n).slice(0, 300);
   for (const c of found) c.frameRef = fr[c.frame];
   state.changes = found;
-  state.chFilter = 'unknown';
+  // Link detections into moving-object tracklets: slow movers across visits,
+  // fast movers across the exposures of a single visit.
+  const tmpl = getTemplate();
+  state.tracks = [
+    ...linkAcrossVisits(found, fr).map(t => ({ ...t, frames: t.changes.map(c => c.frameRef) })),
+    ...linkWithinVisits(fr, tmpl, n).map(t => ({ ...t, frames: [fr[t.frame]] })),
+  ];
+  state.chFilter = state.tracks.length ? 'moving' : 'unknown';
   renderChanges();
 
   // Identify "new" sources against catalogued asteroids, one visit at a time.
   const byFrame = new Map();
-  for (const c of found) if (c.kind === 'new' && !c.glitch) (byFrame.get(c.frameRef) || byFrame.set(c.frameRef, []).get(c.frameRef)).push(c);
+  const inTrack = new Set(state.tracks.flatMap(t => t.changes || []));
+  for (const c of found) if ((c.kind === 'new' || inTrack.has(c)) && !c.glitch) (byFrame.get(c.frameRef) || byFrame.set(c.frameRef, []).get(c.frameRef)).push(c);
   let k = 0;
   const radius = (n * PIXEL_ARCSEC) / 3600 * 0.72, half = (n - 1) / 2, px = PIXEL_ARCSEC / 3600;
   const queue = [...byFrame];
@@ -605,6 +618,19 @@ function queueRenderChanges() {
   setTimeout(() => { renderPending = false; renderChanges(); }, 150);
 }
 
+function trackName(t) {
+  const names = (t.changes || []).map(c => c.known?.name).filter(Boolean);
+  if (!names.length) return null;
+  const top = names.sort((a, b) => names.filter(x => x === b).length - names.filter(x => x === a).length)[0];
+  return names.filter(x => x === top).length * 2 >= names.length ? top : null;
+}
+
+function compass(vx, vy) {
+  // pixel x grows westward and y southward (north up, east left)
+  const ang = (Math.atan2(-vx, -vy) * 180) / Math.PI; // 0 = north, 90 = east
+  return ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'][Math.round(((ang + 360) % 360) / 45) % 8];
+}
+
 function changeFilter(c) {
   switch (state.chFilter) {
     case 'unknown': return c.kind === 'new' && !c.known && !c.glitch;
@@ -625,15 +651,17 @@ function renderChanges() {
     return;
   }
   const all = state.changes;
+  const tracks = state.tracks || [];
   const nNew = all.filter(c => c.kind === 'new' && !c.known && !c.glitch).length;
   const nGlitch = all.filter(c => c.glitch).length;
   const nKnown = all.filter(c => c.known).length;
   const nBright = all.filter(c => c.kind === 'brightened' && !c.glitch).length;
-  $('chSummary').textContent = all.length
+  $('chSummary').textContent = (tracks.length ? `${tracks.length} possible moving object${tracks.length > 1 ? 's' : ''} linked across detections. ` : '') + (all.length
     ? `${all.length} change${all.length > 1 ? 's' : ''} across ${loaded().length} visits: ${nNew} unidentified, ${nKnown} known asteroid${nKnown === 1 ? '' : 's'}, ${nBright} brightened, ${nGlitch} single-exposure glitch${nGlitch === 1 ? '' : 'es'}.`
-    : `Nothing changed significantly across ${loaded().length} visits.`;
+    : `Nothing changed significantly across ${loaded().length} visits.`);
   for (const b of $('chFilters').children) b.setAttribute('aria-pressed', String(b.dataset.f === state.chFilter));
 
+  if (state.chFilter === 'moving') { renderTracks(list, tracks); return; }
   const shown = all.filter(changeFilter).slice(0, CH_LIMIT);
   if (!shown.length) {
     list.innerHTML = `<li class="ch-empty">${all.length ? 'None in this group.' : 'Try a larger field of view or another band.'}</li>`;
@@ -682,6 +710,84 @@ function renderChanges() {
   }
 }
 
+function renderTracks(list, tracks) {
+  if (!tracks.length) {
+    list.innerHTML = '<li class="ch-empty">No detections line up into a moving object here.</li>';
+    return;
+  }
+  const n = state.size;
+  const sig = median(loaded().map(f => f.sigma));
+  const t = getTemplate();
+  for (const tr of tracks) {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.className = 'ch-item' + (state.markTrack === tr ? ' active' : '');
+    const crops = document.createElement('div');
+    crops.className = 'ch-crops';
+    const pick = [0, Math.floor(tr.pts.length / 2), tr.pts.length - 1];
+    for (const k of [...new Set(pick)]) {
+      const p = tr.pts[k];
+      const x = Math.round(p.x), y = Math.round(p.y);
+      const img = tr.kind === 'fast' ? tr.frames[0].parts[p.group] : p.change.frameRef.data;
+      const cut = crop(img, n, x, y), base = crop(t, n, x, y);
+      const cw = Math.round(Math.sqrt(cut.length));
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = cw;
+      const id = new ImageData(cw, cw);
+      paintDiff(id, cut.map((v, i) => v - base[i]), 6 * sig);
+      cv.getContext('2d').putImageData(id, 0, 0);
+      crops.appendChild(cv);
+    }
+    const txt = document.createElement('div');
+    txt.className = 'ch-text';
+    const days = tr.pts.at(-1).t - tr.pts[0].t;
+    const pxPerDay = Math.hypot(tr.fit.vx, tr.fit.vy);
+    const name = trackName(tr);
+    const rate = tr.kind === 'fast'
+      ? `${((pxPerDay * PIXEL_ARCSEC) / 1440).toFixed(1)}″/min`
+      : `${(pxPerDay * PIXEL_ARCSEC).toFixed(1)}″/day`;
+    const span = tr.kind === 'fast'
+      ? `in ${tr.pts.length} exposures over ${Math.round(days * 1440)} min`
+      : `on ${tr.pts.length} visits over ${days.toFixed(1)} days`;
+    txt.innerHTML = `<span class="ch-badge ${name ? 'known' : 'new'}">${tr.kind === 'fast' ? 'Fast mover' : 'Slow mover'}</span><strong>${name ? escapeHtml(name) : 'Unidentified moving object'}</strong>
+      <small>Seen ${span} · ${rate} toward the ${compass(tr.fit.vx, tr.fit.vy)} · path fits to ${(tr.fit.rms * PIXEL_ARCSEC).toFixed(1)}″ · starting ${fmtDate(tr.frames[0].date)}</small>`;
+    b.append(crops, txt);
+    b.onclick = () => showTrack(tr);
+    li.appendChild(b);
+    list.appendChild(li);
+  }
+}
+
+function showTrack(tr) {
+  stop();
+  if (state.mode !== 'diff') setMode('diff');
+  state.idx = loaded().indexOf(tr.frames[0]);
+  state.mark = null;
+  state.markTrack = tr;
+  draw();
+  drawOverlay();
+  renderChanges();
+  $('viewer').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function trackOverlay() {
+  const tr = state.markTrack;
+  if (!tr) return '';
+  const n = state.size;
+  const cur = currentFrame();
+  if (tr.kind === 'fast' && cur !== tr.frames[0]) return '';
+  const pos = p => [((p.x + 0.5) / n) * 100, ((p.y + 0.5) / n) * 100];
+  const path = tr.pts.map(p => pos(p).map(v => v.toFixed(2)).join(',')).join(' ');
+  const dots = tr.pts.map((p, k) => {
+    const [x, y] = pos(p);
+    const here = tr.kind === 'slow' && tr.frames[k] === cur;
+    return here
+      ? `<circle cx="${x}" cy="${y}" r="${(4 / n) * 100}" fill="none" stroke="#ff6b6b" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`
+      : `<circle cx="${x}" cy="${y}" r="${(0.7 / n) * 100}" fill="#ff6b6b"/>`;
+  }).join('');
+  return `<polyline points="${path}" fill="none" stroke="#ff6b6b" stroke-width="1" stroke-dasharray="3 2" vector-effect="non-scaling-stroke" opacity="0.8"/>${dots}`;
+}
+
 function fmtSnr(v) {
   return v >= 1000 ? `${Math.round(v / 1000)}kσ` : `${Math.round(v)}σ`;
 }
@@ -691,6 +797,7 @@ function showChange(c) {
   if (state.mode !== 'diff') setMode('diff');
   state.idx = loaded().indexOf(c.frameRef);
   state.mark = c;
+  state.markTrack = null;
   draw();
   drawOverlay();
   renderChanges();
