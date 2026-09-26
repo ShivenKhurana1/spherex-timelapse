@@ -58,7 +58,7 @@ function bandInfo(band, deg) {
   return Math.max(1, Math.ceil((360 * Math.cos((edge * Math.PI) / 180)) / deg));
 }
 
-function tilesNear(ra, dec, r, deg) {
+export function tilesNear(ra, dec, r, deg) {
   const keys = new Set();
   const nBands = Math.round(180 / deg);
   const b0 = Math.max(0, Math.floor((dec - r + 90) / deg));

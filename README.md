@@ -63,6 +63,17 @@ python3 -m http.server 8000
 
 then open <http://localhost:8000>.
 
+## Tests
+
+```bash
+npm test
+```
+
+Offline unit tests (no network) for the WCS against astropy, the FLAGS Rice decoder
+bit-for-bit against astropy, sky-tile keys shared with the Python index builder,
+coordinate parsing, ephemeris interpolation and change detection. Fixtures in
+`tests/fixtures/` come from a real SPHEREx file. CI runs them on every push.
+
 ## Rebuilding the index
 
 ```bash
