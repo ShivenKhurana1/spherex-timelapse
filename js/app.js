@@ -4,8 +4,9 @@ import { ephemeris, positionAt } from './ephem.js';
 import { makeCutout, PIXEL_ARCSEC } from './cutout.js';
 import { tanDeproject, tanProject, D2R } from './wcs.js';
 import { knownObjects } from './asteroids.js';
+import { wavelengthAt } from './wave.js';
 import { findChanges, crop } from './detect.js';
-import { snapToPeak, photometry, renderChart, toCSV } from './lightcurve.js';
+import { snapToPeak, photometry, renderChart, toCSV, renderSpectrum, spectrumCSV } from './lightcurve.js';
 import {
   backgroundSubtract, medianStack, subtract, stretchLimits, paint, paintDiff, paintMotion, median,
 } from './render.js';
@@ -58,6 +59,8 @@ const state = {
   invert: false,
   crosshair: true,
   probe: null,
+  lcView: 'time',
+  spec: null,
   track: null,
   changes: null,
   chFilter: 'unknown',
@@ -262,6 +265,8 @@ async function loadBand() {
   state.template = null;
   state.probe = null;
   state.lcPoints = null;
+  state.spec?.abort.abort();
+  state.spec = null;
   state.changes = null;
   state.mark = null;
   renderChanges();
@@ -296,6 +301,8 @@ async function loadBand() {
       // Keep the individual exposures so the change scan can reject
       // one-exposure glitches (cosmic rays, satellite glints).
       frame.parts = cuts.length > 1 ? cuts.map(c => backgroundSubtract(c).data) : null;
+      const lams = (frame.lams || []).filter(v => v > 0);
+      frame.lam = lams.length ? lams.reduce((a, b) => a + b, 0) / lams.length : null;
       frame.status = 'ok';
     }
     done++;
@@ -316,6 +323,10 @@ async function loadBand() {
       try {
         const c = await makeCutout(e, e.obj ? e.obj.ra : ra, e.obj ? e.obj.dec : dec, size, abort.signal, { mask: state.mask });
         frame.cuts[k] = c.offImage ? null : c.data;
+        if (!c.offImage) {
+          // Wavelength SPHEREx saw the target at in this exposure (one small cached request).
+          try { (frame.lams ??= [])[k] = (await wavelengthAt(e.url, c.pix[0], c.pix[1], abort.signal)).lam; } catch {}
+        }
       } catch (err) {
         if (abort.signal.aborted) return;
         console.warn('exposure failed', err);
@@ -429,7 +440,7 @@ function draw() {
   } else {
     const label = state.mode === 'blink' ? (state.blinkPhase ? 'B  ' : 'A  ') : '';
     $('hudDate').textContent = label + fmtDateTime(f.date);
-    $('hudFrame').textContent = `${fr.indexOf(f) + 1} / ${fr.length}${f.vmag ? ` · V ${f.vmag.toFixed(1)}` : ''}`;
+    $('hudFrame').textContent = `${fr.indexOf(f) + 1} / ${fr.length}${f.lam ? ` · λ ${f.lam.toFixed(2)} µm` : ''}${f.vmag ? ` · V ${f.vmag.toFixed(1)}` : ''}`;
   }
   updateTimelineMarks();
   updateFilmstripMarks();
@@ -700,7 +711,7 @@ function lightcurvePoints() {
     loaded().forEach((f, i) => {
       const p = photometry(f.data, n, state.probe[0], state.probe[1], f.sigma);
       if (p?.saturated) state.lcSaturated++;
-      else if (p) state.lcPoints.push({ ...p, mjd: f.mjd, date: f.date, i });
+      else if (p) state.lcPoints.push({ ...p, mjd: f.mjd, date: f.date, i, lam: f.lam });
     });
   }
   return state.lcPoints;
@@ -710,6 +721,10 @@ function drawLightcurve() {
   $('lc').hidden = !state.probe;
   $('lcInvite').hidden = !!state.probe || !loaded().length;
   if (!state.probe) return;
+  for (const b of $('lcTabs').children) b.setAttribute('aria-selected', String(b.dataset.v === state.lcView));
+  $('lcTitle').textContent = state.lcView === 'spectrum' ? 'Spectrum' : 'Brightness over time';
+  if (state.lcView === 'spectrum') { drawSpectrum(); return; }
+  $('lcCaveat').textContent = 'Some scatter is expected even for steady stars: SPHEREx sees the star through a slightly different colour of filter on each visit.';
   const composite = state.mode === 'motion' || state.mode === 'static';
   const cur = composite ? -1 : loaded().indexOf(currentFrame());
   const pts = lightcurvePoints();
@@ -721,11 +736,102 @@ function drawLightcurve() {
     : sat ? `${sat} visit${sat > 1 ? 's' : ''} skipped: pixels at the star’s centre were blank (saturated or flagged as bad).` : '';
 }
 
+// ---------- spectrum ----------
+
+const SPEC_PER_BAND = 40;
+const SPEC_SIZE = 21; // small cutouts: just enough for the aperture and background ring
+
+function drawSpectrum() {
+  const sp = state.spec;
+  const pts = sp?.points || [];
+  renderSpectrum($('lcSvg'), pts);
+  $('lcCaveat').textContent = 'Each dot is one exposure. SPHEREx’s filter changes colour across the detector, so repeated visits fill in the spectrum from 0.75 to 5 µm.';
+  $('lcNote').textContent = !sp ? ''
+    : sp.error ? sp.error
+    : sp.loading ? `Measuring… ${sp.done} of ${sp.total} exposures`
+    : pts.length ? `${pts.length} measurements across ${new Set(pts.map(p => p.det)).size} bands${sp.skipped ? ` · ${sp.skipped} skipped (saturated, flagged or off the detector)` : ''}.`
+    : 'No clean measurements: the star may be too bright (saturated) or too faint.';
+}
+
+function probeSky() {
+  const n = state.size, s = (PIXEL_ARCSEC / 3600) * D2R, half = (n - 1) / 2;
+  const [pra, pdec] = centreOf(currentFrame());
+  return tanDeproject([pra * D2R, pdec * D2R], -(state.probe[0] - half) * s, (half - state.probe[1]) * s);
+}
+
+async function measureSpectrum() {
+  state.spec?.abort.abort();
+  const abort = new AbortController();
+  const half = (state.size - 1) / 2;
+  const onObject = state.track && Math.hypot(state.probe[0] - half, state.probe[1] - half) <= 2;
+  const sp = state.spec = { abort, points: [], loading: true, done: 0, total: 0, skipped: 0, probe: state.probe };
+  if (state.track && !onObject) {
+    sp.loading = false;
+    sp.error = 'In tracking mode, a spectrum can be measured for the tracked object (click the centre).';
+    drawLightcurve();
+    return;
+  }
+  const [ra, dec] = probeSky();
+  // Evenly sample each band so a deep field doesn't mean thousands of requests.
+  const byDet = {};
+  for (const e of state.exposures) (byDet[e.detector] ??= []).push(e);
+  const queue = Object.values(byDet).flatMap(list => sampleEvenly(list, SPEC_PER_BAND));
+  sp.total = queue.length;
+  drawLightcurve();
+  let pending = false;
+  const refresh = () => {
+    if (pending) return;
+    pending = true;
+    setTimeout(() => { pending = false; if (state.spec === sp && state.lcView === 'spectrum') drawLightcurve(); }, 250);
+  };
+  const c0 = (SPEC_SIZE - 1) / 2;
+  const worker = async () => {
+    while (queue.length && !abort.signal.aborted) {
+      const e = queue.shift();
+      try {
+        const [r, d] = onObject ? [e.obj.ra, e.obj.dec] : [ra, dec];
+        const c = await makeCutout(e, r, d, SPEC_SIZE, abort.signal, { mask: state.mask });
+        if (c.offImage) { sp.skipped++; continue; }
+        const { data, sigma } = backgroundSubtract(c.data);
+        const p = photometry(data, SPEC_SIZE, c0, c0, sigma);
+        if (!p || p.saturated) { sp.skipped++; continue; }
+        const { lam } = await wavelengthAt(e.url, c.pix[0], c.pix[1], abort.signal);
+        sp.points.push({ ...p, lam, det: e.detector, date: e.date });
+      } catch {
+        if (abort.signal.aborted) return;
+        sp.skipped++;
+      } finally {
+        sp.done++;
+        refresh();
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 16 }, worker));
+  if (abort.signal.aborted) return;
+  sp.points.sort((a, b) => a.lam - b.lam);
+  sp.loading = false;
+  if (state.spec === sp) drawLightcurve();
+}
+
+function setLcView(v) {
+  state.lcView = v;
+  $('lcTip').hidden = true;
+  if (v === 'spectrum' && (!state.spec || state.spec.probe !== state.probe)) measureSpectrum();
+  drawLightcurve();
+}
+
+$('lcTabs').addEventListener('click', e => {
+  const v = e.target.closest('button')?.dataset.v;
+  if (v) setLcView(v);
+});
+
 function setProbe(i, j) {
   const n = state.size;
   const t = getTemplate();
   state.probe = t ? snapToPeak(t, n, i, j) : [i, j];
   state.lcPoints = null;
+  state.spec?.abort.abort();
+  state.spec = null;
   const s = (PIXEL_ARCSEC / 3600) * D2R, half = (n - 1) / 2;
   const [pra, pdec] = centreOf(currentFrame());
   const [ra, dec] = tanDeproject([pra * D2R, pdec * D2R], -(state.probe[0] - half) * s, (half - state.probe[1]) * s);
@@ -733,6 +839,7 @@ function setProbe(i, j) {
     ? `${state.probe[0] === Math.round(half) && state.probe[1] === Math.round(half) ? state.track.name : 'Point'} in the moving frame · ${DETECTORS[state.band].name} · aperture 15″ radius`
     : `${formatRA(ra)} ${formatDec(dec)} · ${DETECTORS[state.band].name} · aperture 15″ radius`;
   drawOverlay();
+  if (state.lcView === 'spectrum') measureSpectrum();
   drawLightcurve();
 }
 
@@ -744,20 +851,32 @@ $('viewer').addEventListener('click', e => {
   if (i >= 0 && j >= 0 && i < n && j < n) setProbe(i, j);
 });
 
-$('lcClear').addEventListener('click', () => { state.probe = null; state.lcPoints = null; drawOverlay(); drawLightcurve(); });
+$('lcClear').addEventListener('click', () => {
+  state.probe = null;
+  state.lcPoints = null;
+  state.spec?.abort.abort();
+  state.spec = null;
+  drawOverlay();
+  drawLightcurve();
+});
 
 $('lcCsv').addEventListener('click', () => {
-  download(new Blob([toCSV(lightcurvePoints())], { type: 'text/csv' }), 'csv');
+  const csv = state.lcView === 'spectrum' ? spectrumCSV(state.spec?.points || []) : toCSV(lightcurvePoints());
+  download(new Blob([csv], { type: 'text/csv' }), 'csv');
 });
 
 $('lcSvg').addEventListener('mousemove', e => {
   const g = e.target.closest('.lc-pt');
   const tip = $('lcTip');
   if (!g) { tip.hidden = true; return; }
-  const p = lightcurvePoints()[Number(g.dataset.k)];
+  const spec = state.lcView === 'spectrum';
+  const p = (spec ? state.spec?.points || [] : lightcurvePoints())[Number(g.dataset.k)];
+  if (!p) return;
   const dot = g.querySelector('.lc-dot').getBoundingClientRect();
   const wrap = $('lcSvg').parentElement.getBoundingClientRect();
-  tip.innerHTML = `${fmtDateTime(p.date)}<br>${p.flux.toFixed(2)} <span>± ${p.err.toFixed(2)} mJy</span>`;
+  tip.innerHTML = spec
+    ? `λ ${p.lam.toFixed(3)} µm <span>· ${DETECTORS[p.det].name} · ${fmtDate(p.date)}</span><br>${p.flux.toFixed(2)} <span>± ${p.err.toFixed(2)} mJy</span>`
+    : `${fmtDateTime(p.date)}${p.lam ? ` <span>· λ ${p.lam.toFixed(3)} µm</span>` : ''}<br>${p.flux.toFixed(2)} <span>± ${p.err.toFixed(2)} mJy</span>`;
   tip.style.left = `${dot.left + dot.width / 2 - wrap.left}px`;
   tip.style.top = `${dot.top - wrap.top}px`;
   tip.hidden = false;
@@ -765,7 +884,7 @@ $('lcSvg').addEventListener('mousemove', e => {
 $('lcSvg').addEventListener('mouseleave', () => { $('lcTip').hidden = true; });
 $('lcSvg').addEventListener('click', e => {
   const g = e.target.closest('.lc-pt');
-  if (!g) return;
+  if (!g || state.lcView === 'spectrum') return;
   stop();
   if (state.mode === 'motion' || state.mode === 'static') setMode('play');
   if (state.mode === 'blink') setMode('play');

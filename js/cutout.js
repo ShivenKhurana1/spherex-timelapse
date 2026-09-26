@@ -116,7 +116,8 @@ export async function makeCutout(exposure, ra, dec, size, signal, { mask = true,
     if (v === v) valid++;
   }
   if (valid < size * size * 0.1) return { offImage: true };
-  return { data: out, valid: valid / (size * size), header: info.header };
+  // pix: where the requested centre falls on the detector (for the wavelength lookup)
+  return { data: out, valid: valid / (size * size), header: info.header, pix: c };
 }
 
 function bilinear(rows, x, y, w, h) {

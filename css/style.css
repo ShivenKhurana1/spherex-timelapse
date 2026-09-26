@@ -209,6 +209,9 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .lc-head h3 { margin: 0; font-size: 15px; }
 .lc-head .hint { margin-top: 2px; }
 .lc-actions { display: flex; gap: 6px; }
+.lc-tabs { display: flex; gap: 6px; margin-top: 8px; }
+.lc-tabs button { background: var(--bg2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 12px; }
+.lc-tabs button[aria-selected="true"] { border-color: var(--accent2); color: var(--accent2); }
 .lc-wrap { position: relative; margin-top: 6px; }
 #lcSvg { width: 100%; height: auto; display: block; }
 .lc-grid { stroke: var(--line); stroke-width: 1; }

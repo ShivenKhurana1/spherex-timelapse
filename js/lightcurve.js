@@ -104,3 +104,39 @@ export function toCSV(points) {
   return 'date_utc,mjd,flux_mJy,err_mJy\n' + points.map(p =>
     `${p.date.toISOString()},${p.mjd.toFixed(5)},${p.flux.toFixed(4)},${p.err.toFixed(4)}`).join('\n');
 }
+
+// Brightness vs wavelength: every measurement from every band on one axis.
+// points: [{lam, flux, err, det, date}]
+export function renderSpectrum(svg, points) {
+  if (!points.length) { svg.innerHTML = ''; return; }
+  const l0 = Math.min(...points.map(p => p.lam)), l1 = Math.max(...points.map(p => p.lam));
+  const lp = (l1 - l0) * 0.03 || 0.05;
+  const lo = Math.min(...points.map(p => p.flux - p.err));
+  const hi = Math.max(...points.map(p => p.flux + p.err));
+  const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.1 || 1;
+  const y0 = lo - pad, y1 = hi + pad;
+  const X = l => M.l + ((l - (l0 - lp)) / (l1 - l0 + 2 * lp)) * (W - M.l - M.r);
+  const Y = v => H - M.b - ((v - y0) / (y1 - y0)) * (H - M.t - M.b);
+  const grid = niceTicks(y0, y1).map(v => `
+    <line x1="${M.l}" x2="${W - M.r}" y1="${Y(v)}" y2="${Y(v)}" class="lc-grid"/>
+    <text x="${M.l - 8}" y="${Y(v) + 4}" text-anchor="end" class="lc-tick">${fmtFlux(v)}</text>`).join('');
+  const xt = niceTicks(l0 - lp, l1 + lp, 6).map(l => `
+    <text x="${X(l)}" y="${H - 8}" text-anchor="middle" class="lc-tick">${+l.toFixed(2)} µm</text>`).join('');
+  const marks = points.map((p, k) => {
+    const x = X(p.lam), y = Y(p.flux);
+    return `<g class="lc-pt" data-k="${k}">
+      <line x1="${x}" x2="${x}" y1="${Y(p.flux - p.err)}" y2="${Y(p.flux + p.err)}" class="lc-err"/>
+      <circle cx="${x}" cy="${y}" r="3.5" class="lc-dot"/>
+      <circle cx="${x}" cy="${y}" r="10" class="lc-hit"/>
+    </g>`;
+  }).join('');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = `${grid}
+    <line x1="${M.l}" x2="${W - M.r}" y1="${H - M.b}" y2="${H - M.b}" class="lc-axis"/>
+    ${xt}${marks}`;
+}
+
+export function spectrumCSV(points) {
+  return 'wavelength_um,flux_mJy,err_mJy,detector,date_utc\n' + points.map(p =>
+    `${p.lam.toFixed(4)},${p.flux.toFixed(4)},${p.err.toFixed(4)},D${p.det},${p.date.toISOString()}`).join('\n');
+}
