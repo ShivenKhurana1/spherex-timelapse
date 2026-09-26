@@ -24,8 +24,11 @@ No install, no account, no backend. Everything runs in the browser.
   uses IMCCE Miriade live.
 - **Scan for changes:** finds compact sources that appear or brighten in any visit,
   rejects one-exposure glitches (cosmic rays, satellite glints) by checking each
-  exposure within a visit, and matches the rest against known asteroids. What's
-  left is a short list of unidentified candidates for a person to review.
+  exposure within a visit, and matches the rest against known asteroids. Detections
+  are then linked into **moving-object tracklets**: slow movers (distant asteroids,
+  Kuiper-belt objects, far-off comets) across several visits, and fast movers
+  (near-Earth objects) across the exposures of a single visit. In Pluto's field it
+  finds and names Pluto from 4 visits, at 8.7″/day against JPL's 9.0″/day.
 - **Known asteroids** labelled on each frame, from IMCCE's SkyBoT service.
 - **Light curves and spectra:** click any star to plot its brightness at every visit,
   or switch to *Spectrum* to measure it in every exposure across all six bands and
