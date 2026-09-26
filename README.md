@@ -15,6 +15,13 @@ No install, no account, no backend. Everything runs in the browser.
 
 - **Five views:** time-lapse, blink, difference (each date minus the median sky),
   motion trail (residual light coloured by date), and a deep median stack.
+- **Follow a moving object:** switch the search to *Moving object* and type a comet or
+  asteroid (3I/ATLAS, 12P, Ceres, 2024 YR4…). Every SPHEREx image along its path is cut
+  out centred on where it was at that moment, so it stays put while stars stream by;
+  *Deep stack* then adds up the object with the stars removed. Featured objects use
+  JPL Horizons positions computed as seen from SPHEREx
+  ([`tools/build_tracks.py`](tools/build_tracks.py), refreshed weekly); anything else
+  uses IMCCE Miriade live.
 - **Scan for changes:** finds compact sources that appear or brighten in any visit,
   rejects one-exposure glitches (cosmic rays, satellite glints) by checking each
   exposure within a visit, and matches the rest against known asteroids. What's
@@ -61,6 +68,7 @@ then open <http://localhost:8000>.
 ```bash
 python3 tools/build_index.py            # incremental: new + most recent folders
 python3 tools/build_index.py --refresh all
+python3 tools/build_tracks.py           # featured comet/asteroid tracks from JPL Horizons
 ```
 
 Standard library only; the first full build takes about an hour.
@@ -68,5 +76,6 @@ Standard library only; the first full build takes about an hour.
 ## Data credit
 
 SPHEREx data are provided by NASA/JPL-Caltech and served by the NASA/IPAC Infrared
-Science Archive (IRSA). Asteroid positions from IMCCE's SkyBoT; name lookup from
+Science Archive (IRSA). Featured tracks from JPL Horizons; other orbits and asteroid
+positions from IMCCE's Miriade and SkyBoT; name lookup from
 CDS Sesame. This project is not affiliated with NASA.
