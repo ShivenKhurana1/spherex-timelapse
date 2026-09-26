@@ -77,6 +77,35 @@ export function mjdToDate(mjd) {
   return new Date((mjd - 40587) * 86400000);
 }
 
+// Decode one tile row into an exposure record.
+function decodeRow(v, o, index) {
+  const det = v.getUint8(o + 14), sub = v.getUint8(o + 15);
+  const [coll, folder] = index.folders[v.getUint16(o + 16, true)].split('/');
+  const seq = String(v.getUint16(o + 18, true)).padStart(4, '0');
+  const ver = index.versions[v.getUint16(o + 20, true)];
+  const id = `${folder}_${seq}_${sub}`;
+  const mjd = v.getFloat32(o + 8, true) + index.mjd0;
+  return {
+    id,
+    detector: det,
+    mjd,
+    date: mjdToDate(mjd),
+    url: `${S3}${coll}/level2/${folder}/${ver}/${det}/level2_${id}D${det}_spx_${ver}.fits`,
+  };
+}
+
+// Is (ra, dec) inside the detector footprint stored at row offset o? Returns
+// the fractional distance to the edge (0 = centre, 1 = edge) or null.
+function contains(v, o, ra, dec) {
+  const p = project(v.getFloat32(o, true), v.getFloat32(o + 4, true), ra, dec);
+  if (!p || Math.hypot(p[0], p[1]) > SEARCH_R) return null;
+  const pa = (v.getInt16(o + 12, true) / 100) * D2R;
+  const u = p[0] * Math.cos(pa) + p[1] * Math.sin(pa);
+  const w = -p[0] * Math.sin(pa) + p[1] * Math.cos(pa);
+  if (Math.abs(u) > HALF_SIDE || Math.abs(w) > HALF_SIDE) return null;
+  return Math.max(Math.abs(u), Math.abs(w)) / HALF_SIDE;
+}
+
 // Returns exposures sorted by time: {id, detector, mjd, date, url}
 export async function findExposures(ra, dec, signal) {
   const index = await loadIndex();
@@ -86,28 +115,37 @@ export async function findExposures(ra, dec, signal) {
   for (const buf of buffers) {
     const v = new DataView(buf);
     for (let o = 0; o + index.rowBytes <= buf.byteLength; o += index.rowBytes) {
-      const cra = v.getFloat32(o, true), cdec = v.getFloat32(o + 4, true);
-      const p = project(cra, cdec, ra, dec);
-      if (!p || Math.hypot(p[0], p[1]) > SEARCH_R) continue;
-      const pa = (v.getInt16(o + 12, true) / 100) * D2R;
-      const u = p[0] * Math.cos(pa) + p[1] * Math.sin(pa);
-      const w = -p[0] * Math.sin(pa) + p[1] * Math.cos(pa);
-      if (Math.abs(u) > HALF_SIDE || Math.abs(w) > HALF_SIDE) continue;
-      const det = v.getUint8(o + 14), sub = v.getUint8(o + 15);
-      const [coll, folder] = index.folders[v.getUint16(o + 16, true)].split('/');
-      const seq = String(v.getUint16(o + 18, true)).padStart(4, '0');
-      const ver = index.versions[v.getUint16(o + 20, true)];
-      const id = `${folder}_${seq}_${sub}`;
-      const mjd = v.getFloat32(o + 8, true) + index.mjd0;
-      out.push({
-        id,
-        detector: det,
-        mjd,
-        date: mjdToDate(mjd),
-        url: `${S3}${coll}/level2/${folder}/${ver}/${det}/level2_${id}D${det}_spx_${ver}.fits`,
-        edge: Math.max(Math.abs(u), Math.abs(w)) / HALF_SIDE,
-      });
+      const edge = contains(v, o, ra, dec);
+      if (edge !== null) out.push({ ...decodeRow(v, o, index), edge });
     }
   }
+  return out.sort((a, b) => a.mjd - b.mjd);
+}
+
+// Exposures that caught a moving object. positionAt(mjd) -> {ra, dec, vmag} | null.
+// Each result carries the object's position at that exposure's time.
+export async function findAlongPath(points, positionAt, signal, onProgress) {
+  const index = await loadIndex();
+  const keys = new Set();
+  for (const p of points) for (const k of tilesNear(p.ra, p.dec, SEARCH_R, index.tileDeg)) if (index.tiles[k]) keys.add(k);
+  const list = [...keys];
+  const out = [];
+  let done = 0;
+  const queue = [...list];
+  const worker = async () => {
+    while (queue.length) {
+      const buf = await loadTile(queue.shift(), signal);
+      const v = new DataView(buf);
+      for (let o = 0; o + index.rowBytes <= buf.byteLength; o += index.rowBytes) {
+        const mjd = v.getFloat32(o + 8, true) + index.mjd0;
+        const pos = positionAt(mjd);
+        if (!pos) continue;
+        const edge = contains(v, o, pos.ra, pos.dec);
+        if (edge !== null) out.push({ ...decodeRow(v, o, index), edge, obj: pos });
+      }
+      onProgress?.(++done, list.length);
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
   return out.sort((a, b) => a.mjd - b.mjd);
 }

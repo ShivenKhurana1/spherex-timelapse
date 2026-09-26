@@ -1,0 +1,80 @@
+{
+ "updated": "2026-09-26T13:50:38Z",
+ "objects": [
+  {
+   "name": "3I/ATLAS",
+   "file": "3i-atlas.json",
+   "aliases": [
+    "3i",
+    "3i/atlas",
+    "atlas interstellar",
+    "c/2025 n1"
+   ]
+  },
+  {
+   "name": "C/2025 A6 (Lemmon)",
+   "file": "c-2025-a6-lemmon.json",
+   "aliases": [
+    "c/2025 a6",
+    "c/2025 a6 (lemmon)",
+    "comet lemmon",
+    "lemmon"
+   ]
+  },
+  {
+   "name": "C/2025 R2 (SWAN)",
+   "file": "c-2025-r2-swan.json",
+   "aliases": [
+    "c/2025 r2",
+    "c/2025 r2 (swan)",
+    "comet swan",
+    "swan"
+   ]
+  },
+  {
+   "name": "29P/Schwassmann-Wachmann",
+   "file": "29p-schwassmann-wachmann.json",
+   "aliases": [
+    "29p",
+    "29p/schwassmann-wachmann",
+    "schwassmann-wachmann"
+   ]
+  },
+  {
+   "name": "(1) Ceres",
+   "file": "1-ceres.json",
+   "aliases": [
+    "(1) ceres",
+    "1",
+    "ceres"
+   ]
+  },
+  {
+   "name": "(4) Vesta",
+   "file": "4-vesta.json",
+   "aliases": [
+    "(4) vesta",
+    "4",
+    "vesta"
+   ]
+  },
+  {
+   "name": "(2) Pallas",
+   "file": "2-pallas.json",
+   "aliases": [
+    "(2) pallas",
+    "2",
+    "pallas"
+   ]
+  },
+  {
+   "name": "(10) Hygiea",
+   "file": "10-hygiea.json",
+   "aliases": [
+    "(10) hygiea",
+    "10",
+    "hygiea"
+   ]
+  }
+ ]
+}

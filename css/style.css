@@ -46,12 +46,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
   box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(255, 162, 92, 0.35);
 }
 .search { flex: 1; display: flex; max-width: 640px; margin-left: auto; }
+.search select {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); border-right: 0;
+  border-radius: 999px 0 0 999px; padding: 0 10px 0 14px; font-size: 13px;
+}
 .search input {
   flex: 1; min-width: 0;
   padding: 10px 14px;
   background: var(--panel); color: var(--text);
   border: 1px solid var(--line); border-right: 0;
-  border-radius: 999px 0 0 999px;
+  border-radius: 0;
   font: inherit; outline: none;
 }
 .search input:focus { border-color: var(--accent); }

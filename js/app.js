@@ -1,5 +1,6 @@
 import { resolve, formatRA, formatDec } from './resolve.js';
-import { findExposures, DETECTORS, loadIndex } from './catalog.js';
+import { findExposures, findAlongPath, DETECTORS, loadIndex } from './catalog.js';
+import { ephemeris, positionAt } from './ephem.js';
 import { makeCutout, PIXEL_ARCSEC } from './cutout.js';
 import { tanDeproject, tanProject, D2R } from './wcs.js';
 import { knownObjects } from './asteroids.js';
@@ -12,6 +13,7 @@ import {
 const $ = id => document.getElementById(id);
 
 const EXAMPLES = [
+  { name: 'Interstellar comet 3I/ATLAS', track: '3I/ATLAS', note: 'Follow the third known interstellar visitor', size: 96, band: 1 },
   { name: "Barnard's Star", ra: 269.4464, dec: 4.7673, note: 'Fastest-moving star in the sky — watch it creep north', size: 48 },
   { name: 'Asteroid 4 Vesta', ra: 215.95, dec: -6.76, note: 'Caught crossing the field, July 2025', size: 240, band: 2, mode: 'motion' },
   { name: 'North Ecliptic Pole', ra: 270.0, dec: 66.5607, note: 'SPHEREx deep field: hundreds of visits' },
@@ -27,6 +29,14 @@ const MODE_HINTS = {
   diff: 'Each date minus the typical sky. Red = brighter than usual, blue = fainter.',
   motion: 'Extra light from every date, coloured purple (earliest) → red (latest). Movers leave a rainbow trail.',
   static: 'Median of all visits: a deeper, cleaner picture with movers removed.',
+};
+
+// In tracking mode the frame follows the object, so stars are what move.
+const TRACK_HINTS = {
+  play: 'The view follows the object: it stays centred while background stars stream past.',
+  diff: 'Each date minus the typical view. In the moving frame, stars show up as streaks of red and blue.',
+  motion: 'Stars leave the rainbow trails here, because the view is following the object.',
+  static: 'Median of all visits in the object’s frame: background stars vanish and the object adds up.',
 };
 
 const state = {
@@ -48,6 +58,7 @@ const state = {
   invert: false,
   crosshair: true,
   probe: null,
+  track: null,
   changes: null,
   chFilter: 'unknown',
   mark: null,
@@ -97,9 +108,13 @@ function setLoading(text) {
 function writeHash() {
   if (!state.target) return;
   const p = new URLSearchParams();
-  if (state.target.name) p.set('name', state.target.name);
-  p.set('ra', state.target.ra.toFixed(5));
-  p.set('dec', state.target.dec.toFixed(5));
+  if (state.track) {
+    p.set('track', state.track.query);
+  } else {
+    if (state.target.name) p.set('name', state.target.name);
+    p.set('ra', state.target.ra.toFixed(5));
+    p.set('dec', state.target.dec.toFixed(5));
+  }
   p.set('band', state.band);
   p.set('fov', state.size);
   p.set('view', state.mode);
@@ -124,6 +139,11 @@ async function lookAt(query, opts = {}) {
   drawAll();
   setLoading(opts.ra !== undefined ? 'Searching the SPHEREx archive…' : `Looking up “${query}”…`);
 
+  if (opts.track) return trackObject(opts.track, opts, abort);
+  state.track = null;
+  renderModes();
+  $('trackNote').hidden = true;
+  $('changes').hidden = false;
   try {
     const target = opts.ra !== undefined
       ? { ra: opts.ra, dec: opts.dec, name: opts.name || null }
@@ -152,6 +172,54 @@ async function lookAt(query, opts = {}) {
     setLoading('');
     toast(e.message || String(e));
   }
+}
+
+async function trackObject(name, opts, abort) {
+  try {
+    setLoading(`Computing the orbit of “${name}”…`);
+    const eph = await ephemeris(name, abort.signal);
+    if (abort.signal.aborted) return;
+    setLoading(`Searching SPHEREx images along the path of ${eph.name}…`);
+    const at = mjd => positionAt(eph.points, mjd);
+    const exps = await findAlongPath(eph.points, at, abort.signal, (d, n) => {
+      $('loadingText').textContent = `Searching SPHEREx images along the path of ${eph.name}… ${Math.round((100 * d) / n)}%`;
+    });
+    if (abort.signal.aborted) return;
+    state.track = { ...eph, query: name };
+    renderModes();
+    $('trackNote').hidden = false;
+    $('trackNote').textContent = eph.precise
+      ? 'Positions from JPL Horizons as seen from SPHEREx, including comets’ non-gravitational forces.'
+      : 'Positions from IMCCE Miriade. Comet predictions can be off by a minute of arc or two; if the object isn’t at the centre, try a wider field of view.';
+    if (!eph.precise && !opts.size && eph.kind === 'comet') { state.size = 160; renderSizes(); }
+    state.exposures = exps;
+    $('changes').hidden = true;
+    $('targetName').textContent = eph.name;
+    $('targetCoords').textContent = `Moving ${eph.kind || 'object'}`;
+    document.title = `${eph.name} · SPHEREx Time-Lapse`;
+    if (!exps.length) {
+      setLoading('');
+      toast(`SPHEREx hasn’t released any images of ${eph.name} yet.`);
+      state.target = null;
+      renderBands();
+      return;
+    }
+    state.target = { name: eph.name, ra: exps[0].obj.ra, dec: exps[0].obj.dec, moving: true };
+    const counts = bandCounts();
+    if (opts.band && counts[opts.band]) state.band = opts.band;
+    else if (!counts[state.band]) state.band = Number(Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0]);
+    renderBands();
+    loadBand();
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    setLoading('');
+    toast(e.message || String(e));
+  }
+}
+
+// Sky centre of a frame: fixed for a place, the object's position when tracking.
+function centreOf(frame) {
+  return frame?.centre || [state.target.ra, state.target.dec];
 }
 
 function bandCounts() {
@@ -216,7 +284,7 @@ async function loadBand() {
       try {
         const cuts = [];
         for (const e of frame.exposures) {
-          const c = await makeCutout(e, ra, dec, size, abort.signal, { mask: state.mask });
+          const c = await makeCutout(e, e.obj ? e.obj.ra : ra, e.obj ? e.obj.dec : dec, size, abort.signal, { mask: state.mask });
           if (!c.offImage) cuts.push(c.data);
         }
         if (!cuts.length) { frame.status = 'off'; continue; }
@@ -224,6 +292,10 @@ async function loadBand() {
         const { data, sigma } = backgroundSubtract(combined);
         frame.data = data;
         frame.sigma = sigma;
+        if (frame.exposures[0].obj) {
+          frame.centre = [frame.exposures[0].obj.ra, frame.exposures[0].obj.dec];
+          frame.vmag = frame.exposures[0].obj.vmag;
+        }
         // Keep the individual exposures so the change scan can reject
         // one-exposure glitches (cosmic rays, satellite glints).
         frame.parts = cuts.length > 1 ? cuts.map(c => backgroundSubtract(c).data) : null;
@@ -318,9 +390,16 @@ function draw() {
       paintMotion(imageData, fr.map(x => subtract(x.data, t)), fr.map(x => x.sigma));
       break;
     }
-    case 'static':
-      paint(imageData, getTemplate(), limits, stretch, cmap, invert);
+    case 'static': {
+      // The stack is fainter than the brightest single visits: scale it on its own.
+      const t = getTemplate();
+      const own = stretchLimits([t], 0.25, state.contrast);
+      const noise = backgroundSubtract(t).sigma;
+      own[0] = -1.5 * noise;
+      own[1] = Math.max(own[1], 15 * noise);
+      paint(imageData, t, own, stretch, cmap, invert);
       break;
+    }
     default:
       paint(imageData, f.data, limits, stretch, cmap, invert);
   }
@@ -333,7 +412,7 @@ function draw() {
   } else {
     const label = state.mode === 'blink' ? (state.blinkPhase ? 'B  ' : 'A  ') : '';
     $('hudDate').textContent = label + fmtDateTime(f.date);
-    $('hudFrame').textContent = `${fr.indexOf(f) + 1} / ${fr.length}`;
+    $('hudFrame').textContent = `${fr.indexOf(f) + 1} / ${fr.length}${f.vmag ? ` · V ${f.vmag.toFixed(1)}` : ''}`;
   }
   updateTimelineMarks();
   updateFilmstripMarks();
@@ -383,7 +462,8 @@ function requestAsteroids(frame) {
   drawOverlay();
   $('astNote').textContent = 'Checking for known asteroids…';
   const radius = (state.size * PIXEL_ARCSEC) / 3600 * 0.72;
-  knownObjects(frame.exposures[0].mjd, state.target.ra, state.target.dec, radius)
+  const [cra, cdec] = centreOf(frame);
+  knownObjects(frame.exposures[0].mjd, cra, cdec, radius)
     .then(list => {
       if (astFrame !== frame) return;
       state.astList = list;
@@ -396,11 +476,12 @@ function requestAsteroids(frame) {
 
 function asteroidMarks() {
   if (!state.asteroids || !state.astList || !state.target) return '';
+  const [cra, cdec] = centreOf(astFrame);
   const n = state.size, half = (n - 1) / 2, s = PIXEL_ARCSEC / 3600;
   const shown = [];
   for (const o of state.astList) {
     if (!(o.vmag <= state.astMag)) continue;
-    const p = tanProject([state.target.ra * D2R, state.target.dec * D2R], o.ra * D2R, o.dec * D2R);
+    const p = tanProject([cra * D2R, cdec * D2R], o.ra * D2R, o.dec * D2R);
     if (!p) continue;
     const i = half - p[0] / D2R / s, j = half - p[1] / D2R / s;
     if (i < 0 || j < 0 || i > n - 1 || j > n - 1) continue;
@@ -628,8 +709,11 @@ function setProbe(i, j) {
   state.probe = t ? snapToPeak(t, n, i, j) : [i, j];
   state.lcPoints = null;
   const s = (PIXEL_ARCSEC / 3600) * D2R, half = (n - 1) / 2;
-  const [ra, dec] = tanDeproject([state.target.ra * D2R, state.target.dec * D2R], -(state.probe[0] - half) * s, (half - state.probe[1]) * s);
-  $('lcWhere').textContent = `${formatRA(ra)} ${formatDec(dec)} · ${DETECTORS[state.band].name} · aperture 15″ radius`;
+  const [pra, pdec] = centreOf(currentFrame());
+  const [ra, dec] = tanDeproject([pra * D2R, pdec * D2R], -(state.probe[0] - half) * s, (half - state.probe[1]) * s);
+  $('lcWhere').textContent = state.track
+    ? `${state.probe[0] === Math.round(half) && state.probe[1] === Math.round(half) ? state.track.name : 'Point'} in the moving frame · ${DETECTORS[state.band].name} · aperture 15″ radius`
+    : `${formatRA(ra)} ${formatDec(dec)} · ${DETECTORS[state.band].name} · aperture 15″ radius`;
   drawOverlay();
   drawLightcurve();
 }
@@ -897,7 +981,7 @@ function renderSizes() {
 
 function renderModes() {
   for (const b of $('modes').children) b.setAttribute('aria-selected', String(b.dataset.mode === state.mode));
-  $('modeHint').textContent = MODE_HINTS[state.mode];
+  $('modeHint').textContent = (state.track && TRACK_HINTS[state.mode]) || MODE_HINTS[state.mode];
 }
 
 function setMode(m) {
@@ -985,8 +1069,9 @@ $('viewer').addEventListener('mousemove', e => {
   const j = Math.floor(((e.clientY - r.top) / r.height) * n);
   if (i < 0 || j < 0 || i >= n || j >= n) return;
   const s = (PIXEL_ARCSEC / 3600) * D2R, half = (n - 1) / 2;
-  const [ra, dec] = tanDeproject([state.target.ra * D2R, state.target.dec * D2R], -(i - half) * s, (half - j) * s);
   const f = currentFrame();
+  const [hra, hdec] = centreOf(state.mode === 'motion' || state.mode === 'static' ? null : f);
+  const [ra, dec] = tanDeproject([hra * D2R, hdec * D2R], -(i - half) * s, (half - j) * s);
   const v = f && state.mode !== 'motion' ? (state.mode === 'static' ? getTemplate() : f.data)[j * n + i] : NaN;
   $('hudCursor').textContent = `${formatRA(ra)} ${formatDec(dec)}${v === v ? `  ${v.toFixed(3)} MJy/sr` : ''}`;
 });
@@ -1004,7 +1089,9 @@ document.addEventListener('keydown', e => {
 $('search').addEventListener('submit', e => {
   e.preventDefault();
   const q = $('q').value.trim();
-  if (q) lookAt(q);
+  if (!q) return;
+  if ($('searchMode').value === 'track') lookAt(q, { track: q });
+  else lookAt(q);
 });
 
 // Settings
@@ -1026,9 +1113,21 @@ for (const ex of EXAMPLES) {
   b.innerHTML = `<strong></strong><span></span>`;
   b.querySelector('strong').textContent = ex.name;
   b.querySelector('span').textContent = ex.note;
-  b.onclick = () => { $('q').value = ex.name; lookAt(ex.name, ex); };
+  b.onclick = () => {
+    $('q').value = ex.track || ex.name;
+    $('searchMode').value = ex.track ? 'track' : 'place';
+    updatePlaceholder();
+    lookAt(ex.name, ex);
+  };
   $('examples').appendChild(b);
 }
+
+function updatePlaceholder() {
+  $('q').placeholder = $('searchMode').value === 'track'
+    ? 'Comet or asteroid — e.g. 3I/ATLAS, 12P, Ceres, 2024 YR4'
+    : "Object name or RA Dec — e.g. Barnard's Star, M42, 270 66.56";
+}
+$('searchMode').addEventListener('change', updatePlaceholder);
 
 // Start from a shared link if present
 function fromHash() {
@@ -1039,7 +1138,12 @@ function fromHash() {
     size: Number(p.get('fov')) || undefined,
     mode: MODE_HINTS[p.get('view')] ? p.get('view') : undefined,
   };
-  if (p.has('ra') && p.has('dec') && Number.isFinite(ra) && Number.isFinite(dec)) {
+  if (p.get('track')) {
+    $('q').value = p.get('track');
+    $('searchMode').value = 'track';
+    updatePlaceholder();
+    lookAt(p.get('track'), { ...opts, track: p.get('track') });
+  } else if (p.has('ra') && p.has('dec') && Number.isFinite(ra) && Number.isFinite(dec)) {
     const name = p.get('name');
     $('q').value = name || `${ra} ${dec}`;
     lookAt(name || '', { ...opts, ra, dec, name });
