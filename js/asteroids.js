@@ -32,16 +32,17 @@ export function knownObjects(mjd, ra, dec, radiusDeg, signal) {
       '-objFilter': '111',
       '-from': 'SPHEREx-TimeLapse',
     });
-    const p = fetch(`${SKYBOT}?${q}`, { signal })
+    const once = () => fetch(`${SKYBOT}?${q}`, { signal })
       .then(r => {
         if (!r.ok) throw new Error(`SkyBoT HTTP ${r.status}`);
         return r.text();
       })
       .then(text => {
-        // SkyBoT answers "no body found" with a non-JSON message.
-        let rows;
-        try { rows = JSON.parse(text); } catch { return []; }
-        if (!Array.isArray(rows)) return [];
+        // An empty reply means "nothing there". Anything that isn't a JSON list
+        // is a service error; throw so it isn't cached as "no asteroids".
+        if (!text.trim()) return [];
+        const rows = JSON.parse(text);
+        if (!Array.isArray(rows)) throw new Error('SkyBoT error');
         return rows.map(o => ({
           name: o.Num ? `(${o.Num}) ${o.Name}` : o.Name,
           ra: hms(o['RA (hms)']),
@@ -51,6 +52,10 @@ export function knownObjects(mjd, ra, dec, radiusDeg, signal) {
           rate: Math.hypot(Number(o['dRA (arcsec/h)']) || 0, Number(o['dDEC (arcsec/h)']) || 0),
         }));
       });
+    const p = once().catch(e => {
+      if (signal?.aborted) throw e;
+      return new Promise(r => setTimeout(r, 1500)).then(once);
+    });
     cache.set(key, p);
     p.catch(() => cache.delete(key));
   }

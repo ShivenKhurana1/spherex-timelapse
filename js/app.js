@@ -3,6 +3,7 @@ import { findExposures, DETECTORS, loadIndex } from './catalog.js';
 import { makeCutout, PIXEL_ARCSEC } from './cutout.js';
 import { tanDeproject, tanProject, D2R } from './wcs.js';
 import { knownObjects } from './asteroids.js';
+import { findChanges, crop } from './detect.js';
 import { snapToPeak, photometry, renderChart, toCSV } from './lightcurve.js';
 import {
   backgroundSubtract, medianStack, subtract, stretchLimits, paint, paintDiff, paintMotion, median,
@@ -47,6 +48,9 @@ const state = {
   invert: false,
   crosshair: true,
   probe: null,
+  changes: null,
+  chFilter: 'unknown',
+  mark: null,
   asteroids: false,
   astMag: 20,
   astList: null,
@@ -190,6 +194,9 @@ async function loadBand() {
   state.template = null;
   state.probe = null;
   state.lcPoints = null;
+  state.changes = null;
+  state.mark = null;
+  renderChanges();
   imageData = ctx.createImageData(state.size, state.size);
   canvas.width = canvas.height = state.size;
   ctx.clearRect(0, 0, state.size, state.size);
@@ -217,6 +224,9 @@ async function loadBand() {
         const { data, sigma } = backgroundSubtract(combined);
         frame.data = data;
         frame.sigma = sigma;
+        // Keep the individual exposures so the change scan can reject
+        // one-exposure glitches (cosmic rays, satellite glints).
+        frame.parts = cuts.length > 1 ? cuts.map(c => backgroundSubtract(c).data) : null;
         frame.status = 'ok';
       } catch (e) {
         if (abort.signal.aborted) return;
@@ -329,6 +339,7 @@ function draw() {
   updateFilmstripMarks();
   drawLightcurve();
   requestAsteroids(composite ? null : f);
+  if (state.mark) drawOverlay();
 }
 
 function drawAll() {
@@ -344,7 +355,10 @@ function drawOverlay() {
     ? `<circle cx="${((state.probe[0] + 0.5) / n) * 100}" cy="${((state.probe[1] + 0.5) / n) * 100}" r="${(3.5 / n) * 100}"
         fill="none" stroke="rgba(255,162,92,0.95)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`
     : '';
-  const ast = asteroidMarks();
+  const ast = asteroidMarks() + (state.mark && currentFrame() === state.mark.frame
+    ? `<circle cx="${((state.mark.x + 0.5) / n) * 100}" cy="${((state.mark.y + 0.5) / n) * 100}" r="${(5 / n) * 100}"
+        fill="none" stroke="#ff6b6b" stroke-width="1.5" stroke-dasharray="3 2" vector-effect="non-scaling-stroke"/>`
+    : '');
   if (!state.crosshair || !state.target) { svg.innerHTML = probe + ast; return; }
   const g = 3, l = 6;
   svg.innerHTML = ast + probe + `
@@ -413,6 +427,168 @@ $('asteroids').addEventListener('change', e => {
   drawOverlay();
 });
 $('astMag').addEventListener('change', e => { state.astMag = Number(e.target.value); drawOverlay(); });
+
+// ---------- change scan ----------
+
+const CH_LIMIT = 60;
+
+async function scanChanges() {
+  const fr = loaded();
+  if (fr.length < 3) { toast('Need at least three visits to find changes.'); return; }
+  const btn = $('scanBtn');
+  btn.disabled = true;
+  btn.textContent = 'Scanning…';
+  await new Promise(r => setTimeout(r, 20)); // let the button repaint
+  const n = state.size;
+  const found = findChanges(fr, getTemplate(), n).slice(0, 300);
+  for (const c of found) c.frameRef = fr[c.frame];
+  state.changes = found;
+  state.chFilter = 'unknown';
+  renderChanges();
+
+  // Identify "new" sources against catalogued asteroids, one visit at a time.
+  const byFrame = new Map();
+  for (const c of found) if (c.kind === 'new' && !c.glitch) (byFrame.get(c.frameRef) || byFrame.set(c.frameRef, []).get(c.frameRef)).push(c);
+  let k = 0;
+  const radius = (n * PIXEL_ARCSEC) / 3600 * 0.72, half = (n - 1) / 2, px = PIXEL_ARCSEC / 3600;
+  const queue = [...byFrame];
+  const check = async () => {
+    while (queue.length) {
+      const [frame, cands] = queue.shift();
+      try {
+        const objs = await knownObjects(frame.exposures[0].mjd, state.target.ra, state.target.dec, radius);
+        for (const c of cands) {
+          let best = null, bd = Infinity;
+          for (const o of objs) {
+            const p = tanProject([state.target.ra * D2R, state.target.dec * D2R], o.ra * D2R, o.dec * D2R);
+            if (!p) continue;
+            const d = Math.hypot(half - p[0] / D2R / px - c.x, half - p[1] / D2R / px - c.y);
+            // ~21″ normally; bright objects saturate and their detected peak wanders.
+            const tol = o.vmag < 12 ? 8 : 3.5;
+            if (d < tol && d < bd) { bd = d; best = o; }
+          }
+          c.known = best;
+        }
+      } catch {
+        for (const c of cands) c.known = undefined;
+      }
+      btn.textContent = `Checking asteroids ${++k}/${byFrame.size}`;
+      queueRenderChanges();
+    }
+  };
+  // A few at a time: SkyBoT is a shared public service.
+  await Promise.all([check(), check(), check()]);
+  btn.textContent = 'Scan again';
+  btn.disabled = false;
+  renderChanges();
+}
+
+let renderPending = false;
+function queueRenderChanges() {
+  if (renderPending) return;
+  renderPending = true;
+  setTimeout(() => { renderPending = false; renderChanges(); }, 150);
+}
+
+function changeFilter(c) {
+  switch (state.chFilter) {
+    case 'unknown': return c.kind === 'new' && !c.known && !c.glitch;
+    case 'glitch': return c.glitch;
+    case 'known': return !!c.known;
+    case 'brightened': return c.kind === 'brightened' && !c.glitch;
+    default: return true;
+  }
+}
+
+function renderChanges() {
+  const list = $('chList');
+  list.innerHTML = '';
+  $('chFilters').hidden = !state.changes;
+  if (!state.changes) {
+    $('scanBtn').textContent = 'Scan for changes';
+    $('chSummary').textContent = 'Scan every visit for sources that appear, move or brighten, then check them against known asteroids.';
+    return;
+  }
+  const all = state.changes;
+  const nNew = all.filter(c => c.kind === 'new' && !c.known && !c.glitch).length;
+  const nGlitch = all.filter(c => c.glitch).length;
+  const nKnown = all.filter(c => c.known).length;
+  const nBright = all.filter(c => c.kind === 'brightened' && !c.glitch).length;
+  $('chSummary').textContent = all.length
+    ? `${all.length} change${all.length > 1 ? 's' : ''} across ${loaded().length} visits: ${nNew} unidentified, ${nKnown} known asteroid${nKnown === 1 ? '' : 's'}, ${nBright} brightened, ${nGlitch} single-exposure glitch${nGlitch === 1 ? '' : 'es'}.`
+    : `Nothing changed significantly across ${loaded().length} visits.`;
+  for (const b of $('chFilters').children) b.setAttribute('aria-pressed', String(b.dataset.f === state.chFilter));
+
+  const shown = all.filter(changeFilter).slice(0, CH_LIMIT);
+  if (!shown.length) {
+    list.innerHTML = `<li class="ch-empty">${all.length ? 'None in this group.' : 'Try a larger field of view or another band.'}</li>`;
+    return;
+  }
+  const n = state.size, t = getTemplate();
+  const sig = median(loaded().map(f => f.sigma));
+  for (const c of shown) {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.className = 'ch-item' + (state.mark === c ? ' active' : '');
+    const crops = document.createElement('div');
+    crops.className = 'ch-crops';
+    const f = c.frameRef;
+    const cutF = crop(f.data, n, c.x, c.y), cutT = crop(t, n, c.x, c.y);
+    const diff = cutF.map((v, i) => v - cutT[i]);
+    const cw = Math.round(Math.sqrt(cutF.length));
+    for (const [data, isDiff] of [[cutF, false], [cutT, false], [diff, true]]) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = cw;
+      const id = new ImageData(cw, cw);
+      if (isDiff) paintDiff(id, data, 6 * sig); else paint(id, data, state.limits, state.stretch, 'gray', false);
+      cv.getContext('2d').putImageData(id, 0, 0);
+      crops.appendChild(cv);
+    }
+    const txt = document.createElement('div');
+    txt.className = 'ch-text';
+    const s = (PIXEL_ARCSEC / 3600) * D2R, half = (n - 1) / 2;
+    const [ra, dec] = tanDeproject([state.target.ra * D2R, state.target.dec * D2R], -(c.x - half) * s, (half - c.y) * s);
+    const badge = c.known
+      ? `<span class="ch-badge known">Known asteroid</span>`
+      : c.glitch ? `<span class="ch-badge glitch">Glitch</span>`
+      : `<span class="ch-badge ${c.kind}">${c.kind === 'new' ? 'New source' : 'Brightened'}</span>`;
+    const seen = c.parts ? ` · in ${c.seenIn} of ${c.parts} exposures` : ' · single exposure, could be a glitch';
+    const who = c.known
+      ? `${escapeHtml(c.known.name)} · V ${c.known.vmag.toFixed(1)}`
+      : c.kind === 'new'
+        ? (!('known' in c) ? 'Checking asteroid catalogue…' : c.known === undefined ? 'Asteroid check failed' : 'Not a catalogued asteroid')
+        : `${Math.round((100 * c.flux) / Math.max(c.base, 1e-9))}% brighter than usual`;
+    txt.innerHTML = `${badge}<strong>${fmtDateTime(f.date)}</strong>
+      <small>${who}${seen} · ${fmtSnr(c.snr)} · ${formatRA(ra)} ${formatDec(dec)}</small>`;
+    b.append(crops, txt);
+    b.onclick = () => showChange(c);
+    li.appendChild(b);
+    list.appendChild(li);
+  }
+}
+
+function fmtSnr(v) {
+  return v >= 1000 ? `${Math.round(v / 1000)}kσ` : `${Math.round(v)}σ`;
+}
+
+function showChange(c) {
+  stop();
+  if (state.mode !== 'play' && state.mode !== 'diff') setMode('diff');
+  state.idx = loaded().indexOf(c.frameRef);
+  state.mark = c;
+  draw();
+  drawOverlay();
+  renderChanges();
+  $('viewer').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+$('scanBtn').addEventListener('click', scanChanges);
+$('chFilters').addEventListener('click', e => {
+  const f = e.target.closest('button')?.dataset.f;
+  if (!f) return;
+  state.chFilter = f;
+  renderChanges();
+});
 
 // ---------- light curve ----------
 

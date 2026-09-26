@@ -224,6 +224,34 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .lc-note { font-size: 13px; color: var(--accent); margin: 6px 0 0; }
 .lc-note:empty { display: none; }
 
+/* Changes */
+.changes {
+  max-width: 760px; margin: 14px auto 0; padding: 14px 16px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.changes h3 { margin: 0; font-size: 15px; }
+.text-btn.primary { background: var(--accent); border-color: var(--accent); color: #1a0d00; font-weight: 600; white-space: nowrap; }
+.ch-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.ch-filters button { background: var(--bg2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; font-size: 12px; }
+.ch-filters button[aria-pressed="true"] { border-color: var(--accent2); color: var(--accent2); }
+.ch-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; max-height: 460px; overflow-y: auto; }
+.ch-item {
+  width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+  background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px;
+}
+.ch-item:hover, .ch-item.active { border-color: var(--accent); }
+.ch-crops { display: flex; gap: 3px; flex-shrink: 0; }
+.ch-crops canvas { width: 46px; height: 46px; image-rendering: pixelated; border-radius: 4px; background: #000; }
+.ch-text { min-width: 0; font-size: 13px; }
+.ch-text strong { font-weight: 600; }
+.ch-text small { display: block; color: var(--muted); font-size: 12px; }
+.ch-badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; margin-right: 6px; border: 1px solid; }
+.ch-badge.new { color: var(--accent); border-color: var(--accent); }
+.ch-badge.brightened { color: #f2d36b; border-color: #f2d36b; }
+.ch-badge.known { color: #77e0b5; border-color: #77e0b5; }
+.ch-badge.glitch { color: var(--muted); border-color: var(--muted); }
+.ch-empty { color: var(--muted); font-size: 13px; padding: 8px 2px; }
+
 /* About */
 .about { max-width: 1100px; margin: 56px auto; padding: 0 24px; }
 .about h2 { font-size: 22px; }
