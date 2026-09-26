@@ -355,7 +355,7 @@ function drawOverlay() {
     ? `<circle cx="${((state.probe[0] + 0.5) / n) * 100}" cy="${((state.probe[1] + 0.5) / n) * 100}" r="${(3.5 / n) * 100}"
         fill="none" stroke="rgba(255,162,92,0.95)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`
     : '';
-  const ast = asteroidMarks() + (state.mark && currentFrame() === state.mark.frame
+  const ast = asteroidMarks() + (state.mark && currentFrame() === state.mark.frameRef
     ? `<circle cx="${((state.mark.x + 0.5) / n) * 100}" cy="${((state.mark.y + 0.5) / n) * 100}" r="${(5 / n) * 100}"
         fill="none" stroke="#ff6b6b" stroke-width="1.5" stroke-dasharray="3 2" vector-effect="non-scaling-stroke"/>`
     : '');
@@ -573,7 +573,7 @@ function fmtSnr(v) {
 
 function showChange(c) {
   stop();
-  if (state.mode !== 'play' && state.mode !== 'diff') setMode('diff');
+  if (state.mode !== 'diff') setMode('diff');
   state.idx = loaded().indexOf(c.frameRef);
   state.mark = c;
   draw();
