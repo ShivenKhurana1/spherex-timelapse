@@ -101,8 +101,8 @@ export function renderChart(svg, points, current, fmtDate) {
 }
 
 export function toCSV(points) {
-  return 'date_utc,mjd,flux_mJy,err_mJy\n' + points.map(p =>
-    `${p.date.toISOString()},${p.mjd.toFixed(5)},${p.flux.toFixed(4)},${p.err.toFixed(4)}`).join('\n');
+  return 'date_utc,mjd,wavelength_um,flux_mJy,err_mJy,measured_flux_mJy\n' + points.map(p =>
+    `${p.date.toISOString()},${p.mjd.toFixed(5)},${p.lam ? p.lam.toFixed(4) : ''},${p.flux.toFixed(4)},${p.err.toFixed(4)},${(p.rawFlux ?? p.flux).toFixed(4)}`).join('\n');
 }
 
 // Brightness vs wavelength: every measurement from every band on one axis.
@@ -139,4 +139,73 @@ export function renderSpectrum(svg, points) {
 export function spectrumCSV(points) {
   return 'wavelength_um,flux_mJy,err_mJy,detector,date_utc\n' + points.map(p =>
     `${p.lam.toFixed(4)},${p.flux.toFixed(4)},${p.err.toFixed(4)},D${p.det},${p.date.toISOString()}`).join('\n');
+}
+
+// Remove brightness differences caused only by the wavelength each visit saw.
+// Fits flux(λ) with a low-order polynomial (iteratively clipping outliers, so a
+// flare or eclipse doesn't bend the fit), then rescales every point to the
+// band's mean wavelength. Variability that isn't tied to wavelength survives.
+// Returns { points, lam0, degree } or null when there isn't enough to fit.
+export function colourCorrect(points) {
+  const pts = points.filter(p => p.lam > 0 && p.flux === p.flux);
+  if (pts.length < 6) return null;
+  const lam0 = pts.reduce((s, p) => s + p.lam, 0) / pts.length;
+  const span = Math.max(...pts.map(p => p.lam)) - Math.min(...pts.map(p => p.lam));
+  if (!(span > 0)) return null;
+  const degree = pts.length >= 12 ? 2 : 1;
+  let use = pts.map(() => true);
+  let coef = null;
+  for (let iter = 0; iter < 4; iter++) {
+    coef = polyfit(pts.filter((_, i) => use[i]).map(p => (p.lam - lam0) / span), pts.filter((_, i) => use[i]).map(p => p.flux), degree);
+    if (!coef) return null;
+    const res = pts.map(p => p.flux - polyval(coef, (p.lam - lam0) / span));
+    const absd = res.filter((_, i) => use[i]).map(Math.abs).sort((a, b) => a - b);
+    const sigma = 1.4826 * absd[absd.length >> 1] || 0;
+    const next = res.map(r => !sigma || Math.abs(r) < 3 * sigma);
+    if (next.every((v, i) => v === use[i])) break;
+    use = next;
+  }
+  const ref = polyval(coef, 0);
+  if (!(ref > 0)) return null;
+  const out = points.map(p => {
+    if (!(p.lam > 0)) return p;
+    const m = polyval(coef, (p.lam - lam0) / span);
+    if (!(m > 0)) return p;
+    const k = ref / m;
+    return { ...p, flux: p.flux * k, err: p.err * k, rawFlux: p.flux };
+  });
+  return { points: out, lam0, degree };
+}
+
+function polyval(c, x) {
+  let v = 0;
+  for (let i = c.length - 1; i >= 0; i--) v = v * x + c[i];
+  return v;
+}
+
+// Least-squares polynomial via normal equations (degree ≤ 2, well conditioned on scaled x).
+function polyfit(xs, ys, degree) {
+  const n = degree + 1;
+  if (xs.length < n + 1) return null;
+  const A = Array.from({ length: n }, () => new Float64Array(n + 1));
+  for (let k = 0; k < xs.length; k++) {
+    const pw = [1];
+    for (let i = 1; i < n; i++) pw.push(pw[i - 1] * xs[k]);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) A[i][j] += pw[i] * pw[j];
+      A[i][n] += pw[i] * ys[k];
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    let piv = i;
+    for (let r = i + 1; r < n; r++) if (Math.abs(A[r][i]) > Math.abs(A[piv][i])) piv = r;
+    [A[i], A[piv]] = [A[piv], A[i]];
+    if (Math.abs(A[i][i]) < 1e-12) return null;
+    for (let r = 0; r < n; r++) {
+      if (r === i) continue;
+      const f = A[r][i] / A[i][i];
+      for (let c = i; c <= n; c++) A[r][c] -= f * A[i][c];
+    }
+  }
+  return Array.from({ length: n }, (_, i) => A[i][n] / A[i][i]);
 }

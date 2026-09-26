@@ -6,7 +6,7 @@ import { tanDeproject, tanProject, D2R } from './wcs.js';
 import { knownObjects } from './asteroids.js';
 import { wavelengthAt } from './wave.js';
 import { findChanges, crop } from './detect.js';
-import { snapToPeak, photometry, renderChart, toCSV, renderSpectrum, spectrumCSV } from './lightcurve.js';
+import { snapToPeak, photometry, renderChart, toCSV, renderSpectrum, spectrumCSV, colourCorrect } from './lightcurve.js';
 import {
   backgroundSubtract, medianStack, subtract, stretchLimits, paint, paintDiff, paintMotion, median,
 } from './render.js';
@@ -62,6 +62,8 @@ const state = {
   crosshair: true,
   probe: null,
   lcView: 'time',
+  colourFix: true,
+  lcFix: null,
   spec: null,
   track: null,
   changes: null,
@@ -716,6 +718,9 @@ function lightcurvePoints() {
       if (p?.saturated) state.lcSaturated++;
       else if (p) state.lcPoints.push({ ...p, mjd: f.mjd, date: f.date, i, lam: f.lam });
     });
+    // Rescale every visit to one wavelength so filter-colour differences don't look like variability.
+    state.lcFix = state.colourFix ? colourCorrect(state.lcPoints) : null;
+    if (state.lcFix) state.lcPoints = state.lcFix.points;
   }
   return state.lcPoints;
 }
@@ -726,8 +731,12 @@ function drawLightcurve() {
   if (!state.probe) return;
   for (const b of $('lcTabs').children) b.setAttribute('aria-selected', String(b.dataset.v === state.lcView));
   $('lcTitle').textContent = state.lcView === 'spectrum' ? 'Spectrum' : 'Brightness over time';
-  if (state.lcView === 'spectrum') { drawSpectrum(); return; }
-  $('lcCaveat').textContent = 'Some scatter is expected even for steady stars: SPHEREx sees the star through a slightly different colour of filter on each visit.';
+  if (state.lcView === 'spectrum') { $('colourRow').hidden = true; drawSpectrum(); return; }
+  $('colourRow').hidden = false;
+  lightcurvePoints();
+  $('lcCaveat').textContent = state.lcFix
+    ? `Adjusted to ${state.lcFix.lam0.toFixed(2)} µm: each visit saw the star at a slightly different wavelength, so brightness is rescaled using a smooth fit to this star’s own colour. This reduces the visit-to-visit scatter (typically by a third to a half) but doesn’t remove it all.`
+    : 'Some scatter is expected even for steady stars: SPHEREx sees the star through a slightly different colour of filter on each visit.';
   const composite = state.mode === 'motion' || state.mode === 'static';
   const cur = composite ? -1 : loaded().indexOf(currentFrame());
   const pts = lightcurvePoints();
@@ -823,6 +832,12 @@ function setLcView(v) {
   drawLightcurve();
 }
 
+$('colourFix').addEventListener('change', e => {
+  state.colourFix = e.target.checked;
+  state.lcPoints = null;
+  drawLightcurve();
+});
+
 $('lcTabs').addEventListener('click', e => {
   const v = e.target.closest('button')?.dataset.v;
   if (v) setLcView(v);
@@ -879,7 +894,7 @@ $('lcSvg').addEventListener('mousemove', e => {
   const wrap = $('lcSvg').parentElement.getBoundingClientRect();
   tip.innerHTML = spec
     ? `λ ${p.lam.toFixed(3)} µm <span>· ${DETECTORS[p.det].name} · ${fmtDate(p.date)}</span><br>${p.flux.toFixed(2)} <span>± ${p.err.toFixed(2)} mJy</span>`
-    : `${fmtDateTime(p.date)}${p.lam ? ` <span>· λ ${p.lam.toFixed(3)} µm</span>` : ''}<br>${p.flux.toFixed(2)} <span>± ${p.err.toFixed(2)} mJy</span>`;
+    : `${fmtDateTime(p.date)}${p.lam ? ` <span>· λ ${p.lam.toFixed(3)} µm</span>` : ''}<br>${p.flux.toFixed(2)} <span>± ${p.err.toFixed(2)} mJy${p.rawFlux !== undefined ? ` (measured ${p.rawFlux.toFixed(2)})` : ''}</span>`;
   tip.style.left = `${dot.left + dot.width / 2 - wrap.left}px`;
   tip.style.top = `${dot.top - wrap.top}px`;
   tip.hidden = false;
