@@ -27,7 +27,11 @@ No install, no account, no backend. Everything runs in the browser.
   exposure within a visit, and matches the rest against known asteroids. What's
   left is a short list of unidentified candidates for a person to review.
 - **Known asteroids** labelled on each frame, from IMCCE's SkyBoT service.
-- **Light curves:** click any star to plot its brightness at every visit (CSV export).
+- **Light curves and spectra:** click any star to plot its brightness at every visit,
+  or switch to *Spectrum* to measure it in every exposure across all six bands and
+  plot brightness against wavelength (0.75–5 µm). Wavelengths come from each file's
+  `WCS-WAVE` lookup table (the filter's colour varies across the detector), which is
+  also shown for every visit. CSV export for both.
 - **Bad-pixel masking** from SPHEREx's own FLAGS layer (cosmic rays, hot pixels,
   persistence), decoded in the browser.
 - Shareable links, PNG and video export, keyboard controls (← → space, `b`, `d`).
