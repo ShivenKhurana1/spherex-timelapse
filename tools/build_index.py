@@ -32,7 +32,9 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 TAP = 'https://irsa.ipac.caltech.edu/TAP/sync'
-COLLECTIONS = ['spherex_qr2', 'spherex_qr3']
+# Survey releases look like spherex_qr2, spherex_qr3, ... ; *_deep repeats the same
+# exposures and *_cal holds calibration files, so both are skipped.
+COLLECTION_RE = re.compile(r'^spherex_qr\d+$')
 TILE_DEG = 5.0
 ROW = struct.Struct('<fffhBBHHHH')
 MJD0 = 60000.0
@@ -55,6 +57,26 @@ def tap(query, tries=4):
                 raise
             print(f'  retry ({e})', file=sys.stderr)
             time.sleep(5 * (attempt + 1))
+
+
+def discover_collections():
+    # Any SIA response describes its parameters, including every collection name,
+    # so a query for a tiny empty patch of sky lists the releases cheaply.
+    url = 'https://irsa.ipac.caltech.edu/SIA?COLLECTION=spherex_qr2&POS=CIRCLE+0+0+0.00001'
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as r:
+                text = r.read().decode()
+            break
+        except Exception:  # noqa: BLE001
+            if attempt == 3:
+                raise
+            time.sleep(5 * (attempt + 1))
+    names = set(re.findall(r'value="(spherex_[a-z0-9_]+)"', text))
+    found = sorted((c for c in names if COLLECTION_RE.match(c)), key=lambda c: int(c.rsplit('qr', 1)[1]))
+    if not found:
+        raise RuntimeError('no SPHEREx releases found')
+    return found
 
 
 def tile_key(ra, dec):
@@ -144,14 +166,17 @@ def main():
     version_list = list(index['versions']) if index else []
     done = set(index.get('complete', [])) if index else set()
 
+    print('Discovering releases…')
+    collections = discover_collections()
+    print(f"  {', '.join(collections)}")
     print('Listing folders…')
     listing = tap(
         "SELECT DISTINCT obs_collection, substring(obs_id, 1, 10) AS folder FROM spherex.obscore "
-        f"WHERE obs_collection IN ({','.join(repr(c) for c in COLLECTIONS)})"
+        f"WHERE obs_collection IN ({','.join(repr(c) for c in collections)})"
     )
     wanted = sorted({(r['obs_collection'], r['folder']) for r in listing}, key=lambda x: (x[1], x[0]))
     recent = set()
-    for c in COLLECTIONS:
+    for c in collections:
         recent |= set([w for w in wanted if w[0] == c][-args.recent:])
     refresh_all = 'all' in args.refresh
 
