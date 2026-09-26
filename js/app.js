@@ -24,6 +24,8 @@ const EXAMPLES = [
   { name: 'South Ecliptic Pole', ra: 90.0, dec: -66.5607, note: 'Second deep field, near the LMC' },
 ];
 
+const MODE_NAMES = { play: 'time-lapse', blink: 'blink', diff: 'difference', motion: 'motion trail', static: 'deep stack' };
+
 const MODE_HINTS = {
   play: 'Every visit in date order. Press play or use ← → keys.',
   blink: 'Flips between two dates. Click the timeline to choose A, shift-click for B.',
@@ -442,6 +444,7 @@ function draw() {
     $('hudDate').textContent = label + fmtDateTime(f.date);
     $('hudFrame').textContent = `${fr.indexOf(f) + 1} / ${fr.length}${f.lam ? ` · λ ${f.lam.toFixed(2)} µm` : ''}${f.vmag ? ` · V ${f.vmag.toFixed(1)}` : ''}`;
   }
+  canvas.setAttribute('aria-label', `SPHEREx ${DETECTORS[state.band].name} image of ${state.target?.name || 'this position'}, ${$('hudDate').textContent}, ${MODE_NAMES[state.mode]} view`);
   updateTimelineMarks();
   updateFilmstripMarks();
   drawLightcurve();

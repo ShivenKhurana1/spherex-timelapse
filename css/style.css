@@ -45,13 +45,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
     radial-gradient(circle, #1b1636 0 60%, #0b0916 100%);
   box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(255, 162, 92, 0.35);
 }
-.search { flex: 1; display: flex; max-width: 640px; margin-left: auto; }
+.search { flex: 1; display: flex; max-width: 640px; margin-left: auto; min-width: 0; }
 .search select {
   background: var(--panel); color: var(--text); border: 1px solid var(--line); border-right: 0;
   border-radius: 999px 0 0 999px; padding: 0 10px 0 14px; font-size: 13px;
 }
 .search input {
-  flex: 1; min-width: 0;
+  flex: 1; min-width: 0; width: 0;
   padding: 10px 14px;
   background: var(--panel); color: var(--text);
   border: 1px solid var(--line); border-right: 0;
@@ -294,6 +294,8 @@ dialog input[type=text], dialog input[type=number] {
   .top { flex-wrap: wrap; padding: 10px 16px; gap: 10px; }
   .brand .tag { display: none; }
   .search { order: 3; flex-basis: 100%; max-width: none; }
+  .search select { max-width: 104px; padding: 0 4px 0 10px; font-size: 12px; }
+  .search button { padding: 0 14px; }
   .workspace { grid-template-columns: 1fr; padding: 0 16px; }
   .panel { position: static; order: 2; }
   .intro { margin-top: 32px; padding: 0 16px; }
