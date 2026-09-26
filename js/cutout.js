@@ -4,6 +4,7 @@ import { readImageHeader, readRows, readFlagsInfo, readFlagRows, BAD_FLAGS } fro
 import { WCS, tanDeproject, D2R } from './wcs.js';
 
 export const PIXEL_ARCSEC = 6.15;
+const STEP = 8; // coarse-grid spacing for the exact WCS mapping
 const headerCache = new Map();
 const flagsCache = new Map();
 
@@ -57,14 +58,40 @@ export async function makeCutout(exposure, ra, dec, size, signal, { mask = true,
     return { offImage: true };
   }
 
+  // Exact sky->pixel mapping on a coarse grid, interpolated in between: the
+  // TAN-SIP distortion is smooth, so this is exact to well under 0.01 px and
+  // far cheaper than inverting the polynomial for every output pixel.
   const sky = cachedGrid(ra, dec, size, scale);
   const px = new Float32Array(size * size * 2);
+  const nodes = [];
+  for (let v = 0; v < size - 1; v += STEP) nodes.push(v);
+  nodes.push(size - 1);
+  const m = nodes.length;
+  const gx = new Float64Array(m * m), gy = new Float64Array(m * m);
+  for (let b = 0; b < m; b++) {
+    for (let a = 0; a < m; a++) {
+      const k = nodes[b] * size + nodes[a];
+      const p = wcs.skyToPix(sky[2 * k], sky[2 * k + 1]);
+      gx[b * m + a] = p[0]; gy[b * m + a] = p[1];
+    }
+  }
   let ymin = Infinity, ymax = -Infinity;
-  for (let k = 0; k < size * size; k++) {
-    const p = wcs.skyToPix(sky[2 * k], sky[2 * k + 1]);
-    px[2 * k] = p[0]; px[2 * k + 1] = p[1];
-    if (p[1] < ymin) ymin = p[1];
-    if (p[1] > ymax) ymax = p[1];
+  let b = 0;
+  for (let j = 0; j < size; j++) {
+    while (b < m - 2 && j > nodes[b + 1]) b++;
+    const fy = (j - nodes[b]) / (nodes[b + 1] - nodes[b]);
+    let a = 0;
+    for (let i = 0; i < size; i++) {
+      while (a < m - 2 && i > nodes[a + 1]) a++;
+      const fx = (i - nodes[a]) / (nodes[a + 1] - nodes[a]);
+      const q = b * m + a;
+      const x = (gx[q] * (1 - fx) + gx[q + 1] * fx) * (1 - fy) + (gx[q + m] * (1 - fx) + gx[q + m + 1] * fx) * fy;
+      const y = (gy[q] * (1 - fx) + gy[q + 1] * fx) * (1 - fy) + (gy[q + m] * (1 - fx) + gy[q + m + 1] * fx) * fy;
+      const k = j * size + i;
+      px[2 * k] = x; px[2 * k + 1] = y;
+      if (y < ymin) ymin = y;
+      if (y > ymax) ymax = y;
+    }
   }
   const y0 = Math.max(0, Math.floor(ymin) - 1);
   const y1 = Math.min(height - 1, Math.ceil(ymax) + 1);

@@ -1,7 +1,21 @@
 // Find SPHEREx exposures covering a sky position using the static tile index
 // built by tools/build_index.py (IRSA's own search API doesn't allow browser CORS).
 
-const S3 = 'https://nasa-irsa-spherex.s3.amazonaws.com/';
+// The same public bucket answers on several hostnames. S3 speaks HTTP/1.1, where
+// browsers allow only ~6 connections per host, so spreading files across hosts
+// lets many more range requests run at once. A file always maps to the same host.
+const S3_HOSTS = [
+  'https://nasa-irsa-spherex.s3.amazonaws.com/',
+  'https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/',
+  'https://s3.amazonaws.com/nasa-irsa-spherex/',
+  'https://s3.us-east-1.amazonaws.com/nasa-irsa-spherex/',
+];
+
+function s3Base(key) {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
+  return S3_HOSTS[Math.abs(h) % S3_HOSTS.length];
+}
 const HALF_SIDE = 1.74;   // detector half-width in degrees (2040 px × 6.15″ / 2)
 const SEARCH_R = 2.5;     // max centre distance for a detector to contain the target
 
@@ -90,7 +104,7 @@ function decodeRow(v, o, index) {
     detector: det,
     mjd,
     date: mjdToDate(mjd),
-    url: `${S3}${coll}/level2/${folder}/${ver}/${det}/level2_${id}D${det}_spx_${ver}.fits`,
+    url: `${s3Base(id + det)}${coll}/level2/${folder}/${ver}/${det}/level2_${id}D${det}_spx_${ver}.fits`,
   };
 }
 

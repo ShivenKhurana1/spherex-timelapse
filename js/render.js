@@ -48,7 +48,7 @@ export function subtract(a, b) {
 // Sample finite values across frames and pick display limits.
 export function stretchLimits(frames, lo = 0.005, hi = 0.998) {
   const sample = [];
-  const step = Math.max(1, Math.floor((frames.length * frames[0].length) / 200000));
+  const step = Math.max(1, Math.floor((frames.length * frames[0].length) / 60000));
   let k = 0;
   for (const f of frames) for (let i = 0; i < f.length; i++) if (k++ % step === 0 && f[i] === f[i]) sample.push(f[i]);
   sample.sort((x, y) => x - y);

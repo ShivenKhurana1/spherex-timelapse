@@ -274,44 +274,61 @@ async function loadBand() {
   drawOverlay();
   setLoading(`Downloading ${state.frames.length} visits in ${DETECTORS[state.band].name}…`);
 
-  const queue = [...state.frames];
   let done = 0;
   const size = state.size;
   const { ra, dec } = state.target;
+
+  // Finish a frame once all its exposures are in.
+  const finish = frame => {
+    const cuts = frame.cuts.filter(Boolean);
+    delete frame.cuts;
+    if (!cuts.length) {
+      frame.status = frame.failed ? 'error' : 'off';
+    } else {
+      const combined = cuts.length === 1 ? cuts[0] : nanMean(cuts);
+      const { data, sigma } = backgroundSubtract(combined);
+      frame.data = data;
+      frame.sigma = sigma;
+      if (frame.exposures[0].obj) {
+        frame.centre = [frame.exposures[0].obj.ra, frame.exposures[0].obj.dec];
+        frame.vmag = frame.exposures[0].obj.vmag;
+      }
+      // Keep the individual exposures so the change scan can reject
+      // one-exposure glitches (cosmic rays, satellite glints).
+      frame.parts = cuts.length > 1 ? cuts.map(c => backgroundSubtract(c).data) : null;
+      frame.status = 'ok';
+    }
+    done++;
+    onFrameLoaded(done);
+  };
+
+  // One pool over all exposures (in frame order), so a frame's exposures
+  // download in parallel instead of one after another.
+  const queue = [];
+  for (const frame of state.frames) {
+    frame.cuts = [];
+    frame.pending = frame.exposures.length;
+    frame.exposures.forEach((e, k) => queue.push({ frame, e, k }));
+  }
   const worker = async () => {
     while (queue.length && !abort.signal.aborted) {
-      const frame = queue.shift();
+      const { frame, e, k } = queue.shift();
       try {
-        const cuts = [];
-        for (const e of frame.exposures) {
-          const c = await makeCutout(e, e.obj ? e.obj.ra : ra, e.obj ? e.obj.dec : dec, size, abort.signal, { mask: state.mask });
-          if (!c.offImage) cuts.push(c.data);
-        }
-        if (!cuts.length) { frame.status = 'off'; continue; }
-        const combined = cuts.length === 1 ? cuts[0] : nanMean(cuts);
-        const { data, sigma } = backgroundSubtract(combined);
-        frame.data = data;
-        frame.sigma = sigma;
-        if (frame.exposures[0].obj) {
-          frame.centre = [frame.exposures[0].obj.ra, frame.exposures[0].obj.dec];
-          frame.vmag = frame.exposures[0].obj.vmag;
-        }
-        // Keep the individual exposures so the change scan can reject
-        // one-exposure glitches (cosmic rays, satellite glints).
-        frame.parts = cuts.length > 1 ? cuts.map(c => backgroundSubtract(c).data) : null;
-        frame.status = 'ok';
-      } catch (e) {
+        const c = await makeCutout(e, e.obj ? e.obj.ra : ra, e.obj ? e.obj.dec : dec, size, abort.signal, { mask: state.mask });
+        frame.cuts[k] = c.offImage ? null : c.data;
+      } catch (err) {
         if (abort.signal.aborted) return;
-        console.warn('frame failed', e);
-        frame.status = 'error';
-      } finally {
-        done++;
-        if (!abort.signal.aborted) onFrameLoaded(done);
+        console.warn('exposure failed', err);
+        frame.failed = true;
       }
+      if (--frame.pending === 0 && !abort.signal.aborted) finish(frame);
     }
   };
-  await Promise.all(Array.from({ length: 6 }, worker));
+  await Promise.all(Array.from({ length: 16 }, worker));
   if (abort.signal.aborted) return;
+  await new Promise(r => setTimeout(r, 80)); // let the last incremental refresh land
+  recomputeLimits();
+  drawAll(true);
   setLoading('');
   $('progressBar').style.width = '0';
   const n = loaded().length;
@@ -342,8 +359,8 @@ function onFrameLoaded(done) {
     state.lcPoints = null;
     recomputeLimits();
     if (state.blinkB < 0 || state.blinkB >= loaded().length) state.blinkB = loaded().length - 1;
-    drawAll();
-  }, 60);
+    drawAll(false);
+  }, 250);
 }
 
 // ---------- rendering ----------
@@ -421,10 +438,11 @@ function draw() {
   if (state.mark) drawOverlay();
 }
 
-function drawAll() {
+// full=false (while loading) only paints thumbnails for newly arrived frames.
+function drawAll(full = true) {
   draw();
   renderTimeline();
-  renderFilmstrip();
+  renderFilmstrip(full);
 }
 
 function drawOverlay() {
@@ -813,25 +831,38 @@ function updateTimelineMarks() {
   }
 }
 
-function renderFilmstrip() {
+const thumbs = new WeakMap(); // frame -> thumbnail button
+
+function renderFilmstrip(full = true) {
   const strip = $('filmstrip');
   const fr = loaded();
-  strip.innerHTML = '';
   const n = state.size;
   const id = new ImageData(n, n);
-  fr.forEach((f, i) => {
-    const b = document.createElement('button');
-    b.className = 'thumb';
-    b.dataset.i = i;
-    const c = document.createElement('canvas');
-    c.width = c.height = n;
+  const paintThumb = (f, c) => {
     paint(id, f.data, state.limits, state.stretch, state.cmap, state.invert);
     c.getContext('2d').putImageData(id, 0, 0);
-    const s = document.createElement('small');
-    s.textContent = fmtDate(f.date);
-    b.append(c, s);
-    strip.appendChild(b);
+  };
+  const keep = new Set();
+  fr.forEach((f, i) => {
+    let b = thumbs.get(f);
+    if (!b || b.firstChild.width !== n) {
+      b = document.createElement('button');
+      b.className = 'thumb';
+      const c = document.createElement('canvas');
+      c.width = c.height = n;
+      const s = document.createElement('small');
+      s.textContent = fmtDate(f.date);
+      b.append(c, s);
+      thumbs.set(f, b);
+      paintThumb(f, c);
+    } else if (full) {
+      paintThumb(f, b.firstChild);
+    }
+    b.dataset.i = i;
+    keep.add(b);
+    strip.appendChild(b); // re-appending keeps date order as frames arrive out of order
   });
+  for (const b of [...strip.children]) if (!keep.has(b)) b.remove();
   updateFilmstripMarks();
 }
 
