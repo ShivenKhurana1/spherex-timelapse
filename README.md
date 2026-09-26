@@ -15,6 +15,10 @@ No install, no account, no backend. Everything runs in the browser.
 
 - **Five views:** time-lapse, blink, difference (each date minus the median sky),
   motion trail (residual light coloured by date), and a deep median stack.
+- **Scan for changes:** finds compact sources that appear or brighten in any visit,
+  rejects one-exposure glitches (cosmic rays, satellite glints) by checking each
+  exposure within a visit, and matches the rest against known asteroids. What's
+  left is a short list of unidentified candidates for a person to review.
 - **Known asteroids** labelled on each frame, from IMCCE's SkyBoT service.
 - **Light curves:** click any star to plot its brightness at every visit (CSV export).
 - **Bad-pixel masking** from SPHEREx's own FLAGS layer (cosmic rays, hot pixels,
