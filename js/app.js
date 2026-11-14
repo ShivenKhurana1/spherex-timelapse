@@ -632,6 +632,36 @@ function compass(vx, vy) {
   return ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'][Math.round(((ang + 360) % 360) / 45) % 8];
 }
 
+// ---------- reporting ----------
+
+const ISSUES = 'https://github.com/ShivenKhurana1/spherex-timelapse/issues/new';
+
+function pixSky(x, y) {
+  const n = state.size, s = (PIXEL_ARCSEC / 3600) * D2R, half = (n - 1) / 2;
+  return tanDeproject([state.target.ra * D2R, state.target.dec * D2R], -(x - half) * s, (half - y) * s);
+}
+
+const skyLine = (ra, dec) => `${formatRA(ra)} ${formatDec(dec)} (RA ${ra.toFixed(5)}°, Dec ${dec.toFixed(5)}°)`;
+
+// A prefilled GitHub issue, so anyone can flag a candidate for others to check.
+function reportLink(title, lines) {
+  const body = [
+    ...lines,
+    `Detector: ${DETECTORS[state.band].name}`,
+    `View: ${location.href}`,
+    '',
+    '_What makes you think this is real? Anything else you noticed?_',
+  ].join('\n');
+  const a = document.createElement('a');
+  a.className = 'ch-report';
+  a.href = `${ISSUES}?${new URLSearchParams({ template: 'candidate.md', title, body, labels: 'candidate' })}`;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.textContent = 'Report';
+  a.title = 'Open a public GitHub issue about this candidate';
+  return a;
+}
+
 function changeFilter(c) {
   switch (state.chFilter) {
     case 'unknown': return c.kind === 'new' && !c.known && !c.glitch;
@@ -670,6 +700,7 @@ function renderChanges() {
   }
   const n = state.size, t = getTemplate();
   const sig = median(loaded().map(f => f.sigma));
+  const inTrack = new Set(tracks.flatMap(tr => tr.changes || []));
   for (const c of shown) {
     const li = document.createElement('li');
     const b = document.createElement('button');
@@ -690,8 +721,7 @@ function renderChanges() {
     }
     const txt = document.createElement('div');
     txt.className = 'ch-text';
-    const s = (PIXEL_ARCSEC / 3600) * D2R, half = (n - 1) / 2;
-    const [ra, dec] = tanDeproject([state.target.ra * D2R, state.target.dec * D2R], -(c.x - half) * s, (half - c.y) * s);
+    const [ra, dec] = pixSky(c.x, c.y);
     const badge = c.known
       ? `<span class="ch-badge known">Known asteroid</span>`
       : c.glitch ? `<span class="ch-badge glitch">Glitch</span>`
@@ -699,6 +729,7 @@ function renderChanges() {
     const seen = c.parts ? ` · in ${c.seenIn} of ${c.parts} exposures` : ' · single exposure, could be a glitch';
     const who = c.known
       ? `${escapeHtml(c.known.name)} · V ${c.known.vmag.toFixed(1)}`
+      : c.glitch ? 'Not in the other exposures of this visit'
       : c.kind === 'new'
         ? (!('known' in c) ? 'Checking asteroid catalogue…' : c.known === undefined ? 'Asteroid check failed' : 'Not a catalogued asteroid')
         : `${Math.round((100 * c.flux) / Math.max(c.base, 1e-9))}% brighter than usual`;
@@ -707,6 +738,20 @@ function renderChanges() {
     b.append(crops, txt);
     b.onclick = () => showChange(c);
     li.appendChild(b);
+    // Offer a report once the asteroid check has cleared it, or for brightenings.
+    // Detections that belong to a moving object are reported with it instead.
+    if (!c.glitch && c.seenIn >= 2 && !inTrack.has(c) && (c.kind === 'brightened' || c.known === null)) {
+      const what = c.kind === 'new' ? 'Uncatalogued source' : 'Brightened source';
+      li.appendChild(reportLink(`${what} at ${formatRA(ra)} ${formatDec(dec)} on ${fmtDate(f.date)}`, [
+        `**${what}** found by the change scan.`,
+        '',
+        `Position: ${skyLine(ra, dec)}`,
+        `Date: ${fmtDateTime(f.date)} (MJD ${f.mjd.toFixed(5)})`,
+        `Significance: ${fmtSnr(c.snr)}${c.parts ? `, seen in ${c.seenIn} of ${c.parts} exposures` : ''}`,
+        ...(c.kind === 'brightened' ? [`Brightening: ${Math.round((100 * c.flux) / Math.max(c.base, 1e-9))}% above its usual level`] : []),
+        `Image: ${f.exposures[0].url}`,
+      ]));
+    }
     list.appendChild(li);
   }
 }
@@ -755,6 +800,18 @@ function renderTracks(list, tracks) {
     b.append(crops, txt);
     b.onclick = () => showTrack(tr);
     li.appendChild(b);
+    if (!name) {
+      const a0 = tr.pts[0], a1 = tr.pts.at(-1);
+      const [ra0, dec0] = pixSky(a0.x, a0.y), [ra1, dec1] = pixSky(a1.x, a1.y);
+      li.appendChild(reportLink(`Possible moving object near ${formatRA(ra0)} ${formatDec(dec0)} (${fmtDate(tr.frames[0].date)})`, [
+        `**Unidentified ${tr.kind === 'fast' ? 'fast' : 'slow'} mover** linked by the change scan.`,
+        '',
+        `Seen ${span}, moving ${rate} toward the ${compass(tr.fit.vx, tr.fit.vy)}; path fits to ${(tr.fit.rms * PIXEL_ARCSEC).toFixed(1)}″`,
+        `First: ${skyLine(ra0, dec0)} at MJD ${(tr.pts[0].t).toFixed(5)}`,
+        `Last: ${skyLine(ra1, dec1)} at MJD ${(tr.pts.at(-1).t).toFixed(5)}`,
+        `Images: ${[...new Set(tr.frames.map(f => f.exposures[0].url))].slice(0, 8).join(' ')}`,
+      ]));
+    }
     list.appendChild(li);
   }
 }

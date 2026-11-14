@@ -29,6 +29,8 @@ No install, no account, no backend. Everything runs in the browser.
   Kuiper-belt objects, far-off comets) across several visits, and fast movers
   (near-Earth objects) across the exposures of a single visit. In Pluto's field it
   finds and names Pluto from 4 visits, at 8.7″/day against JPL's 9.0″/day.
+  Anything left unexplained has a **Report** button that opens a prefilled GitHub
+  issue (labelled `candidate`) with its position, date, images and a link to the view.
 - **Known asteroids** labelled on each frame, from IMCCE's SkyBoT service.
 - **Light curves and spectra:** click any star to plot its brightness at every visit,
   or switch to *Spectrum* to measure it in every exposure across all six bands and

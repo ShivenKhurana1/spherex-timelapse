@@ -305,3 +305,9 @@ dialog input[type=text], dialog input[type=number] {
   .transport { flex-wrap: wrap; }
   .progress { order: 5; flex-basis: 100%; }
 }
+.ch-list li { display: flex; align-items: stretch; gap: 6px; }
+.ch-report {
+  flex-shrink: 0; display: flex; align-items: center; padding: 0 10px; font-size: 12px;
+  border: 1px solid var(--line); border-radius: 10px; color: var(--muted); text-decoration: none;
+}
+.ch-report:hover { border-color: var(--accent2); color: var(--accent2); }
