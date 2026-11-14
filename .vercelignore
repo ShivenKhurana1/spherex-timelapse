@@ -1,0 +1,5 @@
+tests
+tools
+.github
+node_modules
+*.fits
