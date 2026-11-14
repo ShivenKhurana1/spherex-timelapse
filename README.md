@@ -1,6 +1,6 @@
 # SPHEREx Time-Lapse
 
-**Live:** http://gradepeach.me/spherex-timelapse/
+**Live:** https://spherex-timelapse.vercel.app
 
 A public web tool for watching the sky change in NASA SPHEREx images.
 
