@@ -24,7 +24,7 @@
         <option value="place">Place</option>
         <option value="track">Moving object</option>
       </select>
-      <input id="q" name="q" type="search" placeholder="Object name or RA Dec — e.g. Barnard's Star, M42, 270 66.56" aria-label="Object name or coordinates" required>
+      <input id="q" name="q" type="search" placeholder="Object name or RA Dec, e.g. Barnard's Star, M42, 270 66.56" aria-label="Object name or coordinates" required>
       <button type="submit">Look</button>
     </form>
     <button id="settingsBtn" class="icon-btn" title="Settings" aria-label="Settings">
@@ -43,7 +43,7 @@
   <main id="workspace" class="workspace" hidden>
     <aside class="panel">
       <div class="target">
-        <div class="target-name" id="targetName">—</div>
+        <div class="target-name" id="targetName">-</div>
         <div class="target-coords mono" id="targetCoords"></div>
         <p class="hint" id="trackNote" hidden></p>
       </div>
@@ -142,7 +142,7 @@
       </div>
       <div class="blink-pick" id="blinkPick" hidden>
         Blinking <strong id="blinkA">A</strong> ⇄ <strong id="blinkB">B</strong>
-        <span class="hint">— click the timeline to set A, shift-click to set B</span>
+        <span class="hint">(click the timeline to set A, shift-click to set B)</span>
       </div>
 
       <div class="filmstrip" id="filmstrip"></div>

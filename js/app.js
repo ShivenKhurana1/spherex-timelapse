@@ -15,7 +15,7 @@ const $ = id => document.getElementById(id);
 
 const EXAMPLES = [
   { name: 'Interstellar comet 3I/ATLAS', track: '3I/ATLAS', note: 'Follow the third known interstellar visitor', size: 96, band: 1 },
-  { name: "Barnard's Star", ra: 269.4464, dec: 4.7673, note: 'Fastest-moving star in the sky — watch it creep north', size: 48 },
+  { name: "Barnard's Star", ra: 269.4464, dec: 4.7673, note: 'Fastest-moving star in the sky: watch it creep north', size: 48 },
   { name: 'Asteroid 4 Vesta', ra: 215.95, dec: -6.76, note: 'Caught crossing the field, July 2025', size: 240, band: 2, mode: 'motion' },
   { name: 'Pluto’s field, Oct 2025', ra: 304.138, dec: -23.617, note: 'Press “Scan for changes”: Pluto is found and tracked', size: 96, band: 1 },
   { name: 'North Ecliptic Pole', ra: 270.0, dec: 66.5607, note: 'SPHEREx deep field: hundreds of visits' },
@@ -1400,8 +1400,8 @@ for (const ex of EXAMPLES) {
 
 function updatePlaceholder() {
   $('q').placeholder = $('searchMode').value === 'track'
-    ? 'Comet or asteroid — e.g. 3I/ATLAS, 12P, Ceres, 2024 YR4'
-    : "Object name or RA Dec — e.g. Barnard's Star, M42, 270 66.56";
+    ? 'Comet or asteroid, e.g. 3I/ATLAS, 12P, Ceres, 2024 YR4'
+    : "Object name or RA Dec, e.g. Barnard's Star, M42, 270 66.56";
 }
 $('searchMode').addEventListener('change', updatePlaceholder);
 

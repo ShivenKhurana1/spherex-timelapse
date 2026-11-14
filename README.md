@@ -6,7 +6,7 @@ A public web tool for watching the sky change in NASA SPHEREx images.
 
 Type an object name or coordinates, pick a detector band, and the app gathers every
 SPHEREx exposure that covers that spot, aligns them on a common north-up grid, and lets
-you **play them as a movie**, **blink** two epochs, or view their **difference** — the
+you **play them as a movie**, **blink** two epochs, or view their **difference**: the
 fastest way to spot asteroids, comets, high-proper-motion stars and variable sources.
 
 No install, no account, no backend. Everything runs in the browser.
@@ -62,7 +62,7 @@ No install, no account, no backend. Everything runs in the browser.
 
 ## Running locally
 
-It's a static site — any file server works:
+It's a static site, so any file server works:
 
 ```bash
 python3 -m http.server 8000
