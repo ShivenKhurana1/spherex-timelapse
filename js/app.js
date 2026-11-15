@@ -584,6 +584,20 @@ $('astMag').addEventListener('change', e => { state.astMag = Number(e.target.val
 
 const CH_LIMIT = 60;
 
+// The heavy part of the scan, in a worker when the browser allows module workers.
+function scanFrames(fr, template, w) {
+  const local = () => ({ all: findChanges(fr, template, w), fast: linkWithinVisits(fr, template, w) });
+  let worker;
+  try { worker = new Worker(new URL('./scan-worker.js', import.meta.url), { type: 'module' }); } catch { return Promise.resolve(local()); }
+  const frames = fr.map(f => ({ data: f.data, parts: f.parts, partTimes: f.partTimes }));
+  return new Promise(res => {
+    const done = out => { worker.terminate(); res(out); };
+    worker.onmessage = e => done(e.data.error ? local() : e.data);
+    worker.onerror = () => done(local());
+    worker.postMessage({ frames, template, w });
+  });
+}
+
 async function scanChanges() {
   const fr = loaded();
   if (fr.length < 3) { toast('Need at least three visits to find changes.'); return; }
@@ -592,15 +606,21 @@ async function scanChanges() {
   btn.textContent = 'Scanning…';
   await new Promise(r => setTimeout(r, 20)); // let the button repaint
   const n = state.size;
-  const found = findChanges(fr, getTemplate(), n).slice(0, 300);
+  // Cosmic rays are often the most significant spikes; cap them separately so
+  // they can't crowd real candidates out of the list.
+  const tmpl = getTemplate();
+  const field = state.frames;
+  const { all, fast } = await scanFrames(fr, tmpl, n);
+  if (state.frames !== field) { btn.textContent = 'Scan for changes'; btn.disabled = false; return; } // moved on meanwhile
+  const found = [...all.filter(c => !c.glitch).slice(0, 300), ...all.filter(c => c.glitch).slice(0, 100)]
+    .sort((a, b) => b.snr - a.snr);
   for (const c of found) c.frameRef = fr[c.frame];
   state.changes = found;
   // Link detections into moving-object tracklets: slow movers across visits,
   // fast movers across the exposures of a single visit.
-  const tmpl = getTemplate();
   state.tracks = [
     ...linkAcrossVisits(found, fr).map(t => ({ ...t, frames: t.changes.map(c => c.frameRef) })),
-    ...linkWithinVisits(fr, tmpl, n).map(t => ({ ...t, frames: [fr[t.frame]] })),
+    ...fast.map(t => ({ ...t, frames: [fr[t.frame]] })),
   ];
   state.chFilter = state.tracks.length ? 'moving' : 'unknown';
   renderChanges();

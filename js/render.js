@@ -124,7 +124,7 @@ export function paintMotion(imageData, residuals, sigmas, threshold = 5) {
   const size = Math.round(Math.sqrt(n));
   residuals.forEach((raw, t) => {
     const [cr, cg, cb] = hue(T === 1 ? 0 : t / (T - 1));
-        const r = medianFilter(raw, size);
+    const r = median3(raw, size);
     const s = robustSigma(r) || sigmas[t] || 1;
     for (let i = 0; i < n; i++) {
       const z = r[i] / s;
@@ -149,23 +149,58 @@ function robustSigma(d) {
 }
 
 // 3x3 median: removes isolated spikes (cosmic rays, hot pixels), keeps real sources.
-function medianFilter(d, w) {
+// 3x3 median filter. Interior pixels use a fixed 19-comparison network (the
+// classic opt_med9), which is far faster than sorting; NaNs and the border fall
+// back to a general sort.
+export function median3(d, w) {
   const out = new Float32Array(d.length);
   const buf = new Float32Array(9);
+  const general = (x, y) => {
+    let m = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      const yy = y + dy;
+      if (yy < 0 || yy >= w) continue;
+      for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx;
+        if (xx < 0 || xx >= w) continue;
+        const v = d[yy * w + xx];
+        if (v === v) buf[m++] = v;
+      }
+    }
+    return m ? buf.subarray(0, m).sort()[m >> 1] : NaN;
+  };
   for (let y = 0; y < w; y++) {
     for (let x = 0; x < w; x++) {
-      let m = 0;
-      for (let dy = -1; dy <= 1; dy++) {
-        const yy = y + dy;
-        if (yy < 0 || yy >= w) continue;
-        for (let dx = -1; dx <= 1; dx++) {
-          const xx = x + dx;
-          if (xx < 0 || xx >= w) continue;
-          const v = d[yy * w + xx];
-          if (v === v) buf[m++] = v;
-        }
+      if (y === 0 || x === 0 || y === w - 1 || x === w - 1) { out[y * w + x] = general(x, y); continue; }
+      const i = y * w + x;
+      let p0 = d[i - w - 1], p1 = d[i - w], p2 = d[i - w + 1];
+      let p3 = d[i - 1], p4 = d[i], p5 = d[i + 1];
+      let p6 = d[i + w - 1], p7 = d[i + w], p8 = d[i + w + 1];
+      if (!(p0 === p0 && p1 === p1 && p2 === p2 && p3 === p3 && p4 === p4 && p5 === p5 && p6 === p6 && p7 === p7 && p8 === p8)) {
+        out[i] = general(x, y);
+        continue;
       }
-      out[y * w + x] = m ? buf.subarray(0, m).sort()[m >> 1] : NaN;
+      let t;
+      if (p1 > p2) { t = p1; p1 = p2; p2 = t; }
+      if (p4 > p5) { t = p4; p4 = p5; p5 = t; }
+      if (p7 > p8) { t = p7; p7 = p8; p8 = t; }
+      if (p0 > p1) { t = p0; p0 = p1; p1 = t; }
+      if (p3 > p4) { t = p3; p3 = p4; p4 = t; }
+      if (p6 > p7) { t = p6; p6 = p7; p7 = t; }
+      if (p1 > p2) { t = p1; p1 = p2; p2 = t; }
+      if (p4 > p5) { t = p4; p4 = p5; p5 = t; }
+      if (p7 > p8) { t = p7; p7 = p8; p8 = t; }
+      if (p0 > p3) { t = p0; p0 = p3; p3 = t; }
+      if (p5 > p8) { t = p5; p5 = p8; p8 = t; }
+      if (p4 > p7) { t = p4; p4 = p7; p7 = t; }
+      if (p3 > p6) { t = p3; p3 = p6; p6 = t; }
+      if (p1 > p4) { t = p1; p1 = p4; p4 = t; }
+      if (p2 > p5) { t = p2; p2 = p5; p5 = t; }
+      if (p4 > p7) { t = p4; p4 = p7; p7 = t; }
+      if (p4 > p2) { t = p4; p4 = p2; p2 = t; }
+      if (p6 > p4) { t = p6; p6 = p4; p4 = t; }
+      if (p4 > p2) { t = p4; p4 = p2; p2 = t; }
+      out[i] = p4;
     }
   }
   return out;

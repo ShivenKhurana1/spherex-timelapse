@@ -2,7 +2,7 @@
 // either absent from the template ("new": asteroids, comets, transients) or much
 // brighter than usual ("brightened": flaring or variable stars).
 
-import { median } from './render.js';
+import { median, median3 } from './render.js';
 
 const THRESH = 6;          // peak significance (σ of the filtered residual)
 const MIN_PIX = 4;         // connected pixels above 3σ, to reject leftover spikes
@@ -11,28 +11,6 @@ const NEW_FRAC = 0.35;     // template flux below this × residual ⇒ "new"
 const BRIGHT_FRAC = 0.5;   // residual above this × template ⇒ "brightened"
 const HALO_R = 25;         // px: glow radius around very bright sources
 const HALO_FRAC = 0.05;    // fainter than this × a neighbour ⇒ part of its glow
-
-function median3(d, w) {
-  const out = new Float32Array(d.length);
-  const buf = new Float32Array(9);
-  for (let y = 0; y < w; y++) {
-    for (let x = 0; x < w; x++) {
-      let m = 0;
-      for (let dy = -1; dy <= 1; dy++) {
-        const yy = y + dy;
-        if (yy < 0 || yy >= w) continue;
-        for (let dx = -1; dx <= 1; dx++) {
-          const xx = x + dx;
-          if (xx < 0 || xx >= w) continue;
-          const v = d[yy * w + xx];
-          if (v === v) buf[m++] = v;
-        }
-      }
-      out[y * w + x] = m ? buf.subarray(0, m).sort()[m >> 1] : NaN;
-    }
-  }
-  return out;
-}
 
 function robustSigma(d) {
   const a = [];
