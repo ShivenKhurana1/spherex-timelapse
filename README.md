@@ -26,7 +26,8 @@ No install, no account, no backend. Everything runs in the browser.
   *Deep stack* then adds up the object with the stars removed. Featured objects use
   JPL Horizons positions computed as seen from SPHEREx
   ([`tools/build_tracks.py`](tools/build_tracks.py), refreshed weekly); anything else
-  uses IMCCE Miriade live.
+  uses IMCCE Miriade live. *Surprise me* picks one of the first 300 numbered asteroids
+  and follows it in the 4.4-5 µm band, where asteroids glow with their own heat.
 - **Scan for changes:** finds compact sources that appear or brighten in any visit,
   rejects one-exposure glitches (cosmic rays, satellite glints) by checking each
   exposure within a visit, and matches the rest against known asteroids. Detections

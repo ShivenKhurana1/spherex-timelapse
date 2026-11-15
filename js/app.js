@@ -14,6 +14,7 @@ import {
 const $ = id => document.getElementById(id);
 
 const EXAMPLES = [
+  { name: 'Surprise me: an asteroid', random: true, note: 'Follow one of the first 300 asteroids ever found, glowing with its own heat', size: 96, band: 6 },
   { name: 'Interstellar comet 3I/ATLAS', track: '3I/ATLAS', note: 'Follow the third known interstellar visitor', size: 96, band: 1 },
   { name: "Barnard's Star", ra: 269.4464, dec: 4.7673, note: 'Fastest-moving star in the sky: watch it creep north', size: 48 },
   { name: 'Asteroid 4 Vesta', ra: 215.95, dec: -6.76, note: 'Caught crossing the field, July 2025', size: 240, band: 2, mode: 'motion' },
@@ -395,6 +396,17 @@ function recomputeLimits() {
   // Lower limit a touch below the background so noise isn't clipped to black.
   const sig = median(fr.map(f => f.sigma));
   state.limits[0] = -1.5 * sig;
+  // When following an object, scale to it rather than to the field's brightest
+  // star or hot pixel, so the thing you asked for is clearly visible.
+  if (state.track) {
+    const n = state.size, h = Math.round(n / 2);
+    const peaks = fr.map(f => {
+      let m = -Infinity;
+      for (let y = h - 3; y <= h + 3; y++) for (let x = h - 3; x <= h + 3; x++) if (f.data[y * n + x] > m) m = f.data[y * n + x];
+      return m;
+    }).filter(v => v > 5 * sig);
+    if (peaks.length) state.limits[1] = Math.min(state.limits[1], 3 * median(peaks));
+  }
 }
 
 function getTemplate() {
@@ -497,7 +509,8 @@ function drawOverlay() {
         fill="none" stroke="#ff6b6b" stroke-width="1.5" stroke-dasharray="3 2" vector-effect="non-scaling-stroke"/>`
     : '');
   if (!state.crosshair || !state.target) { svg.innerHTML = probe + ast; return; }
-  const g = 3, l = 6;
+  // Leave ~5 px clear around the target so the marker never hides it.
+  const g = Math.max(3, 500 / n), l = 6;
   svg.innerHTML = ast + probe + `
     <g stroke="rgba(111,211,255,0.85)" stroke-width="0.35" vector-effect="non-scaling-stroke">
       <line x1="${50 - g - l}" y1="50" x2="${50 - g}" y2="50"/><line x1="${50 + g}" y1="50" x2="${50 + g + l}" y2="50"/>
@@ -1466,10 +1479,13 @@ for (const ex of EXAMPLES) {
   b.querySelector('strong').textContent = ex.name;
   b.querySelector('span').textContent = ex.note;
   b.onclick = () => {
-    $('q').value = ex.track || ex.name;
-    $('searchMode').value = ex.track ? 'track' : 'place';
+    // The first 300 numbered asteroids are bright (typically V 12-15). At 4.4-5 µm
+    // (D6) they shine by their own heat while most stars fade, so they stand out.
+    const go = ex.random ? { ...ex, track: String(1 + Math.floor(Math.random() * 300)) } : ex;
+    $('q').value = go.track || go.name;
+    $('searchMode').value = go.track ? 'track' : 'place';
     updatePlaceholder();
-    lookAt(ex.name, ex);
+    lookAt(go.name, go);
   };
   $('examples').appendChild(b);
 }
