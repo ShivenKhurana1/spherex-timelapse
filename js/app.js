@@ -8,7 +8,7 @@ import { wavelengthAt } from './wave.js';
 import { findChanges, crop, linkAcrossVisits, linkWithinVisits } from './detect.js';
 import { snapToPeak, photometry, renderChart, toCSV, renderSpectrum, spectrumCSV, colourCorrect } from './lightcurve.js';
 import {
-  backgroundSubtract, medianStack, subtract, stretchLimits, paint, paintDiff, paintMotion, median,
+  backgroundSubtract, medianStack, subtract, leakFraction, starNoise, tame, stretchLimits, paint, paintDiff, paintMotion, median,
 } from './render.js';
 
 const $ = id => document.getElementById(id);
@@ -80,6 +80,8 @@ const state = {
   maxFrames: 80,
   limits: [0, 1],
   template: null,
+  tameStars: true,
+  leak: null,
   abort: null,
   blinkPhase: 0,
 };
@@ -401,6 +403,23 @@ function getTemplate() {
   return state.template;
 }
 
+// Per-pixel factor that fades the leftovers of imperfectly subtracted stars.
+function leakScale() {
+  const t = getTemplate();
+  if (!state.tameStars || !t) return null;
+  if (state.leak?.t !== t) {
+    const fr = loaded(), sig = median(fr.map(f => f.sigma));
+    const leak = leakFraction(fr.map(f => f.data), t, sig);
+    state.leak = { t, leak, scale: starNoise(t, state.size, sig, leak) };
+  }
+  return state.leak.scale;
+}
+
+function residual(f) {
+  const r = subtract(f.data, getTemplate()), k = leakScale();
+  return k ? tame(r, k) : r;
+}
+
 function currentFrame() {
   const fr = loaded();
   if (!fr.length) return null;
@@ -420,12 +439,11 @@ function draw() {
   switch (state.mode) {
     case 'diff': {
       const sig = median(fr.map(x => x.sigma));
-      paintDiff(imageData, subtract(f.data, getTemplate()), 6 * sig);
+      paintDiff(imageData, residual(f), 6 * sig);
       break;
     }
     case 'motion': {
-      const t = getTemplate();
-      paintMotion(imageData, fr.map(x => subtract(x.data, t)), fr.map(x => x.sigma));
+      paintMotion(imageData, fr.map(residual), fr.map(x => x.sigma));
       break;
     }
     case 'static': {
@@ -1342,6 +1360,7 @@ $('sizes').addEventListener('click', e => {
   if (state.exposures.length) loadBand();
 });
 
+$('tameStars').addEventListener('change', e => { state.tameStars = e.target.checked; draw(); });
 $('mask').addEventListener('change', e => { state.mask = e.target.checked; if (state.exposures.length) loadBand(); });
 $('groupDay').addEventListener('change', e => { state.group = e.target.checked; if (state.exposures.length) loadBand(); });
 

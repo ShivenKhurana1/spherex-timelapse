@@ -178,3 +178,47 @@ export function hue(t) {
   const i = Math.min(stops.length - 2, Math.floor(x)), f = x - i;
   return stops[i].map((c, k) => 255 * (c + (stops[i + 1][k] - c) * f));
 }
+
+// SPHEREx pixels (6.15″) are about the size of its stars, so a star's image
+// changes with where it lands on the pixel grid and never subtracts cleanly: a
+// typical visit leaves ~10-20% of each star's flux behind. leakFraction measures
+// that share for this field; tame() then treats it as extra noise, so a star's
+// leftovers fade while anything absent from the template keeps its full strength.
+function localMax(T, w) {
+  const out = new Float32Array(T.length);
+  for (let y = 0; y < w; y++) for (let x = 0; x < w; x++) {
+    let m = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const yy = y + dy, xx = x + dx;
+      if (yy < 0 || xx < 0 || yy >= w || xx >= w) continue;
+      const v = T[yy * w + xx];
+      if (v > m) m = v;
+    }
+    out[y * w + x] = m;
+  }
+  return out;
+}
+
+export function leakFraction(frames, template, sigma) {
+  const r = [];
+  for (const f of frames) for (let i = 0; i < template.length; i += 2) {
+    const t = template[i], d = f[i];
+    if (t > 20 * sigma && d === d) r.push(Math.abs(d - t) / t);
+  }
+  if (r.length < 50) return 0;
+  r.sort((a, b) => a - b);
+  return 1.4826 * r[r.length >> 1];
+}
+
+export function starNoise(template, w, sigma, leak) {
+  const m = localMax(template, w);
+  const out = new Float32Array(m.length);
+  for (let i = 0; i < m.length; i++) out[i] = sigma / Math.hypot(sigma, leak * m[i]);
+  return out; // multiply a residual by this to rescale it
+}
+
+export function tame(residual, scale) {
+  const out = new Float32Array(residual.length);
+  for (let i = 0; i < out.length; i++) out[i] = residual[i] * scale[i];
+  return out;
+}

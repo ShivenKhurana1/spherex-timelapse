@@ -15,6 +15,11 @@ No install, no account, no backend. Everything runs in the browser.
 
 - **Five views:** time-lapse, blink, difference (each date minus the median sky),
   motion trail (residual light coloured by date), and a deep median stack.
+- **Star leftovers faded:** SPHEREx stars are about one pixel wide, so they never
+  subtract perfectly (about 20% of a star's light is typically left over). The app
+  measures that share for each field and fades it in the difference and motion views,
+  which removes about two thirds of the false spots while new sources keep their full
+  strength.
 - **Follow a moving object:** switch the search to *Moving object* and type a comet or
   asteroid (3I/ATLAS, 12P, Ceres, 2024 YR4…). Every SPHEREx image along its path is cut
   out centred on where it was at that moment, so it stays put while stars stream by;
