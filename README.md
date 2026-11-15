@@ -1,6 +1,6 @@
 # SkyDiff
 
-**Live:** https://spherex-timelapse.vercel.app
+**Live:** https://spherex-timelapse.vercel.app · **Demo slides:** [demo/SkyDiff-demo.pdf](demo/SkyDiff-demo.pdf)
 
 A public web tool for watching the sky change in NASA SPHEREx images.
 

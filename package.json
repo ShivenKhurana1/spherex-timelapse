@@ -4,5 +4,6 @@
   "type": "module",
   "scripts": {
     "test": "node --test \"tests/*.test.js\""
-  }
+  },
+  "description": "See what changes in NASA SPHEREx sky images. Code written with the help of an AI assistant (Claude)."
 }
