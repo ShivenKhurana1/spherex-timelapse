@@ -5,7 +5,7 @@ import { makeCutout, PIXEL_ARCSEC } from './cutout.js';
 import { tanDeproject, tanProject, D2R } from './wcs.js';
 import { knownObjects } from './asteroids.js';
 import { wavelengthAt } from './wave.js';
-import { findChanges, crop, linkAcrossVisits, linkWithinVisits } from './detect.js';
+import { findChanges, crop, linkAcrossVisits, linkWithinVisits, PAIR, pairSignal, pairVerdict } from './detect.js';
 import { snapToPeak, photometry, renderChart, toCSV, renderSpectrum, spectrumCSV, colourCorrect } from './lightcurve.js';
 import {
   backgroundSubtract, medianStack, subtract, leakFraction, starNoise, tame, stretchLimits, paint, paintDiff, paintMotion, median,
@@ -601,8 +601,8 @@ $('astMag').addEventListener('change', e => { state.astMag = Number(e.target.val
 const CH_LIMIT = 60;
 
 // The heavy part of the scan, in a worker when the browser allows module workers.
-function scanFrames(fr, template, w) {
-  const local = () => ({ all: findChanges(fr, template, w), fast: linkWithinVisits(fr, template, w) });
+function scanFrames(fr, template, w, scale) {
+  const local = () => ({ all: findChanges(fr, template, w, { scale }), fast: linkWithinVisits(fr, template, w) });
   let worker;
   try { worker = new Worker(new URL('./scan-worker.js', import.meta.url), { type: 'module' }); } catch { return Promise.resolve(local()); }
   const frames = fr.map(f => ({ data: f.data, parts: f.parts, partTimes: f.partTimes }));
@@ -610,7 +610,7 @@ function scanFrames(fr, template, w) {
     const done = out => { worker.terminate(); res(out); };
     worker.onmessage = e => done(e.data.error ? local() : e.data);
     worker.onerror = () => done(local());
-    worker.postMessage({ frames, template, w });
+    worker.postMessage({ frames, template, w, scale });
   });
 }
 
@@ -626,11 +626,35 @@ async function scanChanges() {
   // they can't crowd real candidates out of the list.
   const tmpl = getTemplate();
   const field = state.frames;
-  const { all, fast } = await scanFrames(fr, tmpl, n);
+  // Star leftovers count as noise, whatever the display setting.
+  const sig = median(fr.map(f => f.sigma));
+  const scale = starNoise(tmpl, n, sig, leakFraction(fr.map(f => f.data), tmpl, sig));
+  const { all, fast } = await scanFrames(fr, tmpl, n, scale);
   if (state.frames !== field) { btn.textContent = 'Scan for changes'; btn.disabled = false; return; } // moved on meanwhile
   const found = [...all.filter(c => !c.glitch).slice(0, 300), ...all.filter(c => c.glitch).slice(0, 100)]
     .sort((a, b) => b.snr - a.snr);
   for (const c of found) c.frameRef = fr[c.frame];
+
+  // Candidates no second exposure could check: look for them on the partner
+  // detector, which saw the same sky at the same moment.
+  const unchecked = found.filter(c => !c.glitch && !c.parts && c.kind === 'new').slice(0, 150);
+  if (unchecked.length) {
+    let k = 0;
+    btn.textContent = `Checking partner detector 0/${unchecked.length}`;
+    const queue = [...unchecked];
+    const run = async () => {
+      while (queue.length && state.frames === field) {
+        const c = queue.shift();
+        await pairCheck(c).catch(() => null);
+        const v = pairVerdict(c.snr, c.pair);
+        if (v === 'cosmic') { c.glitch = true; c.pairGlitch = true; }
+        else if (v === 'confirmed') c.pairOK = true;
+        btn.textContent = `Checking partner detector ${++k}/${unchecked.length}`;
+      }
+    };
+    await Promise.all([run(), run(), run(), run()]);
+    if (state.frames !== field) return;
+  }
   state.changes = found;
   // Link detections into moving-object tracklets: slow movers across visits,
   // fast movers across the exposures of a single visit.
@@ -706,6 +730,27 @@ function compass(vx, vy) {
 // ---------- reporting ----------
 
 const ISSUES = 'https://github.com/ShivenKhurana1/spherex-timelapse/issues/new';
+
+// Look for the candidate on the partner detector, which saw the same sky at the
+// same moment. Sets c.pair to the best significance over the visit's exposures
+// (null when no partner image covers it).
+const PAIR_N = 15;
+async function pairCheck(c, signal) {
+  const [ra, dec] = pixSky(c.cx ?? c.x, c.cy ?? c.y);
+  let best = null;
+  for (const e of c.frameRef.exposures) {
+    const p = state.exposures.find(x => x.id === e.id && x.detector === PAIR[e.detector]);
+    if (!p) continue;
+    try {
+      const cut = await makeCutout(p, ra, dec, PAIR_N, signal);
+      if (cut.offImage) continue;
+      const s = pairSignal(backgroundSubtract(cut.data).data, PAIR_N);
+      if (s !== null && (best === null || s > best)) best = s;
+    } catch (err) { if (signal?.aborted) throw err; }
+  }
+  c.pair = best;
+  return best;
+}
 
 function pixSky(x, y) {
   const n = state.size, s = (PIXEL_ARCSEC / 3600) * D2R, half = (n - 1) / 2;
@@ -797,9 +842,14 @@ function renderChanges() {
       ? `<span class="ch-badge known">Known asteroid</span>`
       : c.glitch ? `<span class="ch-badge glitch">Glitch</span>`
       : `<span class="ch-badge ${c.kind}">${c.kind === 'new' ? 'New source' : 'Brightened'}</span>`;
-    const seen = c.parts ? ` · in ${c.seenIn} of ${c.parts} exposures` : ' · single exposure, could be a glitch';
+    const partner = DETECTORS[PAIR[state.band]].name;
+    const seen = c.parts ? ` · in ${c.seenIn} of ${c.parts} exposures`
+      : c.pairOK ? ` · also on ${partner}, taken at the same moment`
+      : c.pairGlitch ? ''
+      : ' · single exposure, could be a glitch';
     const who = c.known
       ? `${escapeHtml(c.known.name)} · V ${c.known.vmag.toFixed(1)}`
+      : c.pairGlitch ? `Missing from ${partner}, which saw the same sky at the same moment: a cosmic ray`
       : c.glitch ? 'Not in the other exposures of this visit'
       : c.kind === 'new'
         ? (!('known' in c) ? 'Checking asteroid catalogue…' : c.known === undefined ? 'Asteroid check failed' : 'Not a catalogued asteroid')
@@ -811,14 +861,14 @@ function renderChanges() {
     li.appendChild(b);
     // Offer a report once the asteroid check has cleared it, or for brightenings.
     // Detections that belong to a moving object are reported with it instead.
-    if (!c.glitch && c.seenIn >= 2 && !inTrack.has(c) && (c.kind === 'brightened' || c.known === null)) {
+    if (!c.glitch && (c.seenIn >= 2 || c.pairOK) && !inTrack.has(c) && (c.kind === 'brightened' || c.known === null)) {
       const what = c.kind === 'new' ? 'Uncatalogued source' : 'Brightened source';
       li.appendChild(reportLink(`${what} at ${formatRA(ra)} ${formatDec(dec)} on ${fmtDate(f.date)}`, [
         `**${what}** found by the change scan.`,
         '',
         `Position: ${skyLine(ra, dec)}`,
         `Date: ${fmtDateTime(f.date)} (MJD ${f.mjd.toFixed(5)})`,
-        `Significance: ${fmtSnr(c.snr)}${c.parts ? `, seen in ${c.seenIn} of ${c.parts} exposures` : ''}`,
+        `Significance: ${fmtSnr(c.snr)}${c.parts ? `, seen in ${c.seenIn} of ${c.parts} exposures` : ''}${c.pairOK ? `, confirmed on ${partner} (${fmtSnr(c.pair)})` : ''}`,
         ...(c.kind === 'brightened' ? [`Brightening: ${Math.round((100 * c.flux) / Math.max(c.base, 1e-9))}% above its usual level`] : []),
         `Image: ${f.exposures[0].url}`,
       ]));

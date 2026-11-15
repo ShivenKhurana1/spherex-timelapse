@@ -29,12 +29,18 @@ No install, no account, no backend. Everything runs in the browser.
   uses IMCCE Miriade live. *Surprise me* picks one of the first 300 numbered asteroids
   and follows it in the 4.4-5 µm band, where asteroids glow with their own heat.
 - **Scan for changes:** finds compact sources that appear or brighten in any visit,
-  rejects one-exposure glitches (cosmic rays, satellite glints) by checking each
-  exposure within a visit, and matches the rest against known asteroids. Detections
-  are then linked into **moving-object tracklets**: slow movers (distant asteroids,
-  Kuiper-belt objects, far-off comets) across several visits, and fast movers
-  (near-Earth objects) across the exposures of a single visit. In Pluto's field it
-  finds and names Pluto from 4 visits, at 8.7″/day against JPL's 9.0″/day.
+  and matches them against known asteroids. Star leftovers count as noise, so they
+  don't pose as discoveries. Glitches are rejected two ways:
+  - a cosmic ray or satellite glint shows up in only one of a visit's exposures
+    taken minutes apart;
+  - a candidate with no such exposure is looked up on the partner detector, which
+    images the same sky at the same moment (D1/D4, D2/D5, D3/D6). A cosmic ray
+    hits only one detector.
+
+  Detections are then linked into **moving-object tracklets**: slow movers (distant
+  asteroids, Kuiper-belt objects, far-off comets) across several visits, and fast
+  movers (near-Earth objects) across a tight sequence of exposures. In Pluto's field
+  it finds and names Pluto from 5 visits, at 7.7″/day against JPL's 9.0″/day.
   Anything left unexplained has a **Report** button that opens a prefilled GitHub
   issue (labelled `candidate`) with its position, date, images and a link to the view.
 - **Known asteroids** labelled on each frame, from IMCCE's SkyBoT service.
@@ -77,6 +83,23 @@ python3 -m http.server 8000
 ```
 
 then open <http://localhost:8000>.
+
+## How well the scan works
+
+Measured on 20 fields (about 300 visits) against every catalogued asteroid from
+SkyBoT, including fields centred on asteroids of V 13-18:
+
+| | before | now |
+|---|---|---|
+| asteroids detected | 38 | 40 |
+| star leftovers reported as new | 289 | 28 |
+| confirmed but unexplained candidates | 756 | 464 |
+| false slow tracklets | 12 | 6 |
+| false fast movers | 14 | 0 |
+
+The partner-detector check then rejects most of the remaining cosmic rays among
+candidates that only one exposure saw (49 of 80 on the North Ecliptic Pole).
+SPHEREx sees asteroids down to about V 17.5 in a visit; fainter ones are missed.
 
 ## Tests
 

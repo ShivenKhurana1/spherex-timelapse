@@ -11,10 +11,13 @@ const NEW_FRAC = 0.35;     // template flux below this × residual ⇒ "new"
 const BRIGHT_FRAC = 0.5;   // residual above this × template ⇒ "brightened"
 const HALO_R = 25;         // px: glow radius around very bright sources
 const HALO_FRAC = 0.05;    // fainter than this × a neighbour ⇒ part of its glow
+const CLOSE_MIN = 30;      // minutes: exposures this close can vouch for each other
+const FAST_MAX_PX_DAY = (900 / 6.15) * 24; // 900″/h, about 2.5 px per exposure
 
-function robustSigma(d) {
+function robustSigma(d, keep) {
   const a = [];
-  for (let i = 0; i < d.length; i += 2) if (d[i] === d[i]) a.push(Math.abs(d[i]));
+  for (let i = 0; i < d.length; i += 2) if (d[i] === d[i] && (!keep || keep[i] > 0.95)) a.push(Math.abs(d[i]));
+  if (keep && a.length < 200) return robustSigma(d);
   return 1.4826 * median(a) || 1;
 }
 
@@ -34,13 +37,21 @@ function apStats(d, w, cx, cy, r, r1, r2) {
 
 // frames: [{data, ...}], template: Float32Array, w: size.
 // Returns [{frame, x, y, snr, kind, flux, base}] sorted by significance.
-export function findChanges(frames, template, w) {
+// opts.scale: optional per-pixel factor (render.js starNoise) that turns star
+// leftovers into noise, so detection significance ignores imperfect subtraction.
+export function findChanges(frames, template, w, opts = {}) {
   const out = [];
   frames.forEach((f, fi) => {
     const res = new Float32Array(w * w);
     for (let i = 0; i < res.length; i++) res[i] = f.data[i] - template[i];
-    const r = median3(res, w);
-    const s = robustSigma(r);
+    const raw = median3(res, w);
+    let r = raw;
+    if (opts.scale) {
+      for (let i = 0; i < res.length; i++) res[i] *= opts.scale[i];
+      r = median3(res, w);
+    }
+    // Noise from pixels clear of stars, where the scale doesn't apply.
+    const s = robustSigma(r, opts.scale);
     for (let y = EDGE; y < w - EDGE; y++) {
       for (let x = EDGE; x < w - EDGE; x++) {
         const v = r[y * w + x];
@@ -59,11 +70,12 @@ export function findChanges(frames, template, w) {
         if (npix < MIN_PIX) continue;
         const R = apStats(r, w, x, y, 2, 5, 7);
         if (R.ring > 0.3 * v) continue;
+        const Rw = r === raw ? R : apStats(raw, w, x, y, 2, 5, 7);
         // Any blank pixels at the peak means saturation or masking: not trustworthy.
         let holes = 0;
         for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (f.data[(y + dy) * w + x + dx] !== f.data[(y + dy) * w + x + dx]) holes++;
         if (holes) continue;
-        const flux = R.sum - R.ring * R.n;
+        const flux = Rw.sum - Rw.ring * Rw.n;
         const T = apStats(template, w, x, y, 2, 5, 7);
         const base = T.sum - T.ring * T.n;
         let kind = null;
@@ -73,26 +85,40 @@ export function findChanges(frames, template, w) {
         // Sub-pixel centroid (3x3, positive residual only) for measuring motion.
         let sx = 0, sy = 0, sw = 0;
         for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-          const q = r[(y + dy) * w + x + dx];
+          const q = raw[(y + dy) * w + x + dx];
           if (q > 0) { sx += q * dx; sy += q * dy; sw += q; }
         }
         const c = { frame: fi, x, y, cx: x + sx / sw, cy: y + sy / sw, snr: v / s, kind, flux, base };
         if (f.parts) {
           // Real sources show up in every exposure of the visit; a cosmic ray
           // or satellite glint shows up in one.
+          // NaN = blank pixels at the spot (saturated or masked): that exposure
+          // can't tell us either way.
           const peak = raw => {
             let m = -Infinity;
             for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
               const k = (y + dy) * w + x + dx;
+              if (raw[k] !== raw[k]) return NaN;
               const d = raw[k] - template[k];
               if (d > m) m = d;
             }
             return m;
           };
-          const ref = peak(f.data);
-          c.parts = f.parts.length;
-          c.seenIn = f.parts.filter(p => peak(p) > 0.4 * ref).length;
-          c.glitch = c.seenIn < 2;
+          // Exposures grouped from the same day can be hours apart, long enough
+          // for an asteroid to move off this spot, so only compare against
+          // exposures taken within CLOSE_MIN of the one where it's brightest.
+          const peaks = f.parts.map(peak);
+          let kb = -1;
+          for (let k = 0; k < peaks.length; k++) if (peaks[k] === peaks[k] && (kb < 0 || peaks[k] > peaks[kb])) kb = k;
+          const times = f.partTimes || [];
+          const close = kb < 0 ? [] : peaks.map((_, k) => k)
+            .filter(k => peaks[k] === peaks[k] && (!times.length || Math.abs(times[k] - times[kb]) * 1440 <= CLOSE_MIN));
+          if (close.length >= 2) {
+            const ref = Math.max(peaks[kb], 1e-9);
+            c.parts = close.length;
+            c.seenIn = close.filter(k => peaks[k] > 0.4 * ref).length;
+            c.glitch = c.seenIn < 2;
+          }
         }
         out.push(c);
       }
@@ -187,12 +213,15 @@ function link(dets, { minPoints, minMove, maxSpan, tol }) {
 
 // Slow movers seen on several visits. changes: output of findChanges (non-glitch
 // "new" sources); frames: the loaded frames (for times).
-export function linkAcrossVisits(changes, frames) {
+export function linkAcrossVisits(changes, frames, { minVerified = 2 } = {}) {
   const dets = changes
     // "Brightened" counts too: a mover passing over a faint star looks like one.
     .filter(c => !c.glitch)
     .map(c => ({ x: c.cx ?? c.x, y: c.cy ?? c.y, t: frames[c.frame].mjd, group: c.frame, change: c }));
+  // Detections that couldn't be checked against a second exposure (or the
+  // partner detector) may be cosmic rays; a tracklet needs minVerified that were.
   return link(dets, { minPoints: 3, minMove: MIN_MOVE, maxSpan: MAX_SPAN, tol: LINK_TOL })
+    .filter(tr => tr.pts.filter(p => p.change.seenIn >= 2 || p.change.pairOK).length >= minVerified)
     .map(tr => ({ kind: 'slow', ...tr, changes: tr.pts.map(p => p.change) }));
 }
 
@@ -236,11 +265,62 @@ export function linkWithinVisits(frames, template, w) {
       const here = at(f.parts[d.group]);
       return others.every(k => at(f.parts[k]) < 0.3 * here);
     };
-    for (const tr of link(dets, { minPoints: 3, minMove: 4, maxSpan: 1, tol: 1.5 })) {
+    // Only exposures from one tight sequence (consecutive gaps under
+    // CLOSE_MIN); same-day groups can be hours apart, and three detections
+    // spread that far fit a line by chance.
+    const maxSpan = CLOSE_MIN * 2 / 1440;
+    for (const tr of link(dets, { minPoints: 3, minMove: 4, maxSpan, tol: 1.5 })) {
+      const ts = tr.pts.map(p => p.t);
+      if (ts.some((t, i) => i && (t - ts[i - 1]) * 1440 > CLOSE_MIN)) continue;
+      // Steady motion: every step covers a fair share of the expected distance.
+      const v = Math.hypot(tr.fit.vx, tr.fit.vy);
+      // Faster than this, a source smears into a streak within one exposure and
+      // can't pass as a point; so three such "points" are a chance alignment.
+      if (v > FAST_MAX_PX_DAY) continue;
+      // A real object keeps roughly the same brightness from one exposure to the next.
+      const snrs = tr.pts.map(p => p.snr);
+      if (Math.max(...snrs) > 5 * Math.min(...snrs)) continue;
+      if (tr.pts.some((p, i) => i && Math.hypot(p.x - tr.pts[i - 1].x, p.y - tr.pts[i - 1].y) < 0.5 * v * (p.t - tr.pts[i - 1].t))) continue;
       const groups = tr.pts.map(p => p.group);
       if (!tr.pts.every(p => vacated(p, groups.filter(g => g !== p.group)))) continue;
       out.push({ kind: 'fast', ...tr, frame: fi });
     }
   });
   return out;
+}
+
+// ---------- paired-detector confirmation ----------
+
+// SPHEREx images each patch of sky on two detectors at once (D1/D4, D2/D5,
+// D3/D6, split by a dichroic). A cosmic ray hits one detector; a real source
+// shows up on both. stamp: a small cutout from the partner detector centred
+// on the candidate. Returns the peak significance at the centre (σ of the
+// stamp's outer ring), or null if the centre is blank.
+export const PAIR = { 1: 4, 2: 5, 3: 6, 4: 1, 5: 2, 6: 3 };
+export function pairSignal(stamp, n, box = 1) {
+  const c = (n - 1) / 2, ring = [];
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const v = stamp[y * n + x];
+    if (v === v && Math.hypot(x - c, y - c) >= 4) ring.push(v);
+  }
+  if (ring.length < 20) return null;
+  const bg = median(ring);
+  const sig = 1.4826 * median(ring.map(v => Math.abs(v - bg))) || 1e-9;
+  let peak = -Infinity;
+  for (let dy = -box; dy <= box; dy++) for (let dx = -box; dx <= box; dx++) {
+    const v = stamp[(Math.round(c) + dy) * n + Math.round(c) + dx];
+    if (v === v && v > peak) peak = v;
+  }
+  return peak === -Infinity ? null : (peak - bg) / sig;
+}
+
+// Verdict for a candidate no second exposure could vouch for, from its
+// significance on the main detector (snr) and the partner (pair). Known
+// asteroids above 18σ show at least a third of it on the partner; cosmic rays
+// of hundreds of σ show 1-4σ.
+export function pairVerdict(snr, pair) {
+  if (pair === null || pair === undefined) return null;
+  if (snr >= 20 && pair < Math.max(3, 0.05 * snr)) return 'cosmic';
+  if (pair >= 5) return 'confirmed';
+  return null;
 }
