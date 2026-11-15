@@ -1,4 +1,4 @@
-# SPHEREx Time-Lapse
+# SkyDiff
 
 **Live:** https://spherex-timelapse.vercel.app
 

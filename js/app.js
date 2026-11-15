@@ -176,7 +176,7 @@ async function lookAt(query, opts = {}) {
     state.target = target;
     $('targetName').textContent = target.name || 'Custom position';
     $('targetCoords').textContent = `${formatRA(target.ra)}  ${formatDec(target.dec)}`;
-    document.title = `${target.name || 'Sky position'} · SPHEREx Time-Lapse`;
+    document.title = `${target.name || 'Sky position'} · SkyDiff`;
     setLoading('Searching the SPHEREx archive…');
 
     state.exposures = await findExposures(target.ra, target.dec, abort.signal);
@@ -223,7 +223,7 @@ async function trackObject(name, opts, abort) {
     $('changes').hidden = true;
     $('targetName').textContent = eph.name;
     $('targetCoords').textContent = `Moving ${eph.kind || 'object'}`;
-    document.title = `${eph.name} · SPHEREx Time-Lapse`;
+    document.title = `${eph.name} · SkyDiff`;
     if (!exps.length) {
       setLoading('');
       toast(`SPHEREx hasn’t released any images of ${eph.name} yet.`);
@@ -729,7 +729,7 @@ function compass(vx, vy) {
 
 // ---------- reporting ----------
 
-const ISSUES = 'https://github.com/ShivenKhurana1/spherex-timelapse/issues/new';
+const ISSUES = 'https://github.com/ShivenKhurana1/skydiff/issues/new';
 
 // Look for the candidate on the partner detector, which saw the same sky at the
 // same moment. Sets c.pair to the best significance over the visit's exposures
@@ -1626,7 +1626,7 @@ function onUrlChange() {
     $('workspace').hidden = true;
     $('intro').hidden = false;
     $('q').value = '';
-    document.title = 'SPHEREx Time-Lapse';
+    document.title = 'SkyDiff';
     return;
   }
   const cur = state.target && hashTarget('#' + new URLSearchParams(state.track

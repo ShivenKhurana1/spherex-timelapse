@@ -30,7 +30,7 @@ export function knownObjects(mjd, ra, dec, radiusDeg, signal) {
       '-loc': '500',
       '-filter': '0',
       '-objFilter': '111',
-      '-from': 'SPHEREx-TimeLapse',
+      '-from': 'SkyDiff',
     });
     // SkyBoT answers one cone at a time (~5 s each), so give up after 30 s
     // rather than leaving the note on "Checking" forever.
