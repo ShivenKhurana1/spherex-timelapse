@@ -203,7 +203,9 @@ async function trackObject(name, opts, abort) {
     $('trackNote').hidden = false;
     $('trackNote').textContent = eph.precise
       ? 'Positions from JPL Horizons as seen from SPHEREx, including comets’ non-gravitational forces.'
-      : 'Positions from IMCCE Miriade. Comet predictions can be off by a minute of arc or two; if the object isn’t at the centre, try a wider field of view.';
+      : eph.kind === 'comet'
+        ? 'Positions from IMCCE Miriade. Comet predictions can be off by a minute of arc or two; if the object isn’t at the centre, try a wider field of view.'
+        : 'Positions from IMCCE Miriade, as seen from Earth’s centre. Near-Earth asteroids can sit a few pixels off centre because SPHEREx orbits Earth.';
     if (!eph.precise && !opts.size && eph.kind === 'comet') { state.size = 160; renderSizes(); }
     state.exposures = exps;
     $('changes').hidden = true;
@@ -281,6 +283,8 @@ async function loadBand() {
   state.tracks = null;
   state.mark = null;
   state.markTrack = null;
+  state.astChecking = false;
+  $('scanBtn').disabled = false;
   renderChanges();
   imageData = ctx.createImageData(state.size, state.size);
   canvas.width = canvas.height = state.size;
@@ -623,6 +627,7 @@ async function scanChanges() {
     ...fast.map(t => ({ ...t, frames: [fr[t.frame]] })),
   ];
   state.chFilter = state.tracks.length ? 'moving' : 'unknown';
+  state.astChecking = true;
   renderChanges();
 
   // Identify "new" sources against catalogued asteroids, one visit at a time.
@@ -633,7 +638,7 @@ async function scanChanges() {
   const radius = (n * PIXEL_ARCSEC) / 3600 * 0.72, half = (n - 1) / 2, px = PIXEL_ARCSEC / 3600;
   const queue = [...byFrame];
   const check = async () => {
-    while (queue.length) {
+    while (queue.length && state.frames === field) {
       const [frame, cands] = queue.shift();
       try {
         const objs = await knownObjects(frame.exposures[0].mjd, state.target.ra, state.target.dec, radius);
@@ -652,12 +657,15 @@ async function scanChanges() {
       } catch {
         for (const c of cands) c.known = undefined;
       }
+      if (state.frames !== field) return;
       btn.textContent = `Checking asteroids ${++k}/${byFrame.size}`;
       queueRenderChanges();
     }
   };
   // A few at a time: SkyBoT is a shared public service.
   await Promise.all([check(), check(), check()]);
+  if (state.frames !== field) return; // the user moved to another field meanwhile
+  state.astChecking = false;
   btn.textContent = 'Scan again';
   btn.disabled = false;
   renderChanges();
@@ -740,7 +748,7 @@ function renderChanges() {
   const nBright = all.filter(c => c.kind === 'brightened' && !c.glitch).length;
   $('chSummary').textContent = (tracks.length ? `${tracks.length} possible moving object${tracks.length > 1 ? 's' : ''} linked across detections. ` : '') + (all.length
     ? `${all.length} change${all.length > 1 ? 's' : ''} across ${loaded().length} visits: ${nNew} unidentified, ${nKnown} known asteroid${nKnown === 1 ? '' : 's'}, ${nBright} brightened, ${nGlitch} single-exposure glitch${nGlitch === 1 ? '' : 'es'}.`
-    : `Nothing changed significantly across ${loaded().length} visits.`);
+    : `Nothing changed significantly across ${loaded().length} visits.`) + (state.astChecking ? ' Checking them against known asteroids…' : '');
   for (const b of $('chFilters').children) b.setAttribute('aria-pressed', String(b.dataset.f === state.chFilter));
 
   if (state.chFilter === 'moving') { renderTracks(list, tracks); return; }
@@ -840,18 +848,20 @@ function renderTracks(list, tracks) {
     const days = tr.pts.at(-1).t - tr.pts[0].t;
     const pxPerDay = Math.hypot(tr.fit.vx, tr.fit.vy);
     const name = trackName(tr);
+    // Until every detection has been checked against SkyBoT, don't call it unidentified.
+    const pending = !name && (tr.changes || []).some(c => !('known' in c));
     const rate = tr.kind === 'fast'
       ? `${((pxPerDay * PIXEL_ARCSEC) / 1440).toFixed(1)}″/min`
       : `${(pxPerDay * PIXEL_ARCSEC).toFixed(1)}″/day`;
     const span = tr.kind === 'fast'
       ? `in ${tr.pts.length} exposures over ${Math.round(days * 1440)} min`
       : `on ${tr.pts.length} visits over ${days.toFixed(1)} days`;
-    txt.innerHTML = `<span class="ch-badge ${name ? 'known' : 'new'}">${tr.kind === 'fast' ? 'Fast mover' : 'Slow mover'}</span><strong>${name ? escapeHtml(name) : 'Unidentified moving object'}</strong>
+    txt.innerHTML = `<span class="ch-badge ${name ? 'known' : 'new'}">${tr.kind === 'fast' ? 'Fast mover' : 'Slow mover'}</span><strong>${name ? escapeHtml(name) : pending ? 'Moving object (checking asteroid catalogue…)' : 'Unidentified moving object'}</strong>
       <small>Seen ${span} · ${rate} toward the ${compass(tr.fit.vx, tr.fit.vy)} · path fits to ${(tr.fit.rms * PIXEL_ARCSEC).toFixed(1)}″ · starting ${fmtDate(tr.frames[0].date)}</small>`;
     b.append(crops, txt);
     b.onclick = () => showTrack(tr);
     li.appendChild(b);
-    if (!name) {
+    if (!name && !pending) {
       const a0 = tr.pts[0], a1 = tr.pts.at(-1);
       const [ra0, dec0] = pixSky(a0.x, a0.y), [ra1, dec1] = pixSky(a1.x, a1.y);
       li.appendChild(reportLink(`Possible moving object near ${formatRA(ra0)} ${formatDec(dec0)} (${fmtDate(tr.frames[0].date)})`, [
@@ -1096,7 +1106,7 @@ $('lcClear').addEventListener('click', () => {
 
 $('lcCsv').addEventListener('click', () => {
   const csv = state.lcView === 'spectrum' ? spectrumCSV(state.spec?.points || []) : toCSV(lightcurvePoints());
-  download(new Blob([csv], { type: 'text/csv' }), 'csv');
+  download(new Blob([csv], { type: 'text/csv' }), 'csv', state.lcView === 'spectrum' ? 'spectrum' : 'lightcurve');
 });
 
 $('lcSvg').addEventListener('mousemove', e => {
@@ -1294,10 +1304,10 @@ function stamp(g) {
   g.fillText(credit, 14, EXPORT_PX - 14);
 }
 
-function download(blob, ext) {
+function download(blob, ext, tag = '') {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `spherex-${(state.target.name || 'sky').replace(/\W+/g, '-').toLowerCase()}-${DETECTORS[state.band].name}.${ext}`;
+  a.download = `spherex-${(state.target.name || 'sky').replace(/\W+/g, '-').toLowerCase()}-${DETECTORS[state.band].name}${tag ? '-' + tag : ''}.${ext}`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
@@ -1306,7 +1316,7 @@ $('pngBtn').addEventListener('click', () => {
   if (!loaded().length) return;
   const [c, g] = exportCanvas();
   stamp(g);
-  c.toBlob(b => download(b, 'png'));
+  c.toBlob(b => download(b, 'png', state.mode));
 });
 
 $('videoBtn').addEventListener('click', async () => {

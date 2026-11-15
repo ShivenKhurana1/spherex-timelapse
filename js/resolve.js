@@ -38,14 +38,16 @@ export async function resolve(input, signal) {
 }
 
 export function formatRA(ra) {
-  const h = ra / 15;
-  const hh = Math.floor(h), mm = Math.floor((h - hh) * 60), ss = ((h - hh) * 60 - mm) * 60;
+  // Round once in tenths of a second of time so 59.96s carries into the minute.
+  let t = Math.round((((ra % 360) + 360) % 360) / 15 * 36000);
+  if (t >= 24 * 36000) t = 0;
+  const hh = Math.floor(t / 36000), mm = Math.floor((t % 36000) / 600), ss = (t % 600) / 10;
   return `${String(hh).padStart(2, '0')}h${String(mm).padStart(2, '0')}m${ss.toFixed(1).padStart(4, '0')}s`;
 }
 
 export function formatDec(dec) {
   const sign = dec < 0 ? '−' : '+';
-  const d = Math.abs(dec);
-  const dd = Math.floor(d), mm = Math.floor((d - dd) * 60), ss = ((d - dd) * 60 - mm) * 60;
-  return `${sign}${String(dd).padStart(2, '0')}°${String(mm).padStart(2, '0')}′${ss.toFixed(0).padStart(2, '0')}″`;
+  const t = Math.round(Math.abs(dec) * 3600); // whole arcseconds, so 59.6″ carries
+  const dd = Math.floor(t / 3600), mm = Math.floor((t % 3600) / 60), ss = t % 60;
+  return `${sign}${String(dd).padStart(2, '0')}°${String(mm).padStart(2, '0')}′${String(ss).padStart(2, '0')}″`;
 }

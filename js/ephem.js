@@ -74,7 +74,8 @@ async function miriade(name, signal) {
     dec: sexa(p.DEC, false),
     vmag: Number(p.VMag),
   }));
-  return { name: d.sso.name, kind: d.sso.type, source: 'IMCCE Miriade (geocentric)', precise: false, points };
+  const label = d.sso.num ? `(${d.sso.num}) ${d.sso.name}` : d.sso.name;
+  return { name: label, kind: d.sso.type, source: 'IMCCE Miriade (geocentric)', precise: false, points };
 }
 
 // Linear interpolation (RA wrap-safe) of the object's position at time mjd.

@@ -32,7 +32,14 @@ export function knownObjects(mjd, ra, dec, radiusDeg, signal) {
       '-objFilter': '111',
       '-from': 'SPHEREx-TimeLapse',
     });
-    const once = () => fetch(`${SKYBOT}?${q}`, { signal })
+    // SkyBoT answers one cone at a time (~5 s each), so give up after 30 s
+    // rather than leaving the note on "Checking" forever.
+    const sig = () => {
+      if (!AbortSignal.timeout) return signal;
+      const t = AbortSignal.timeout(30000);
+      return signal && AbortSignal.any ? AbortSignal.any([signal, t]) : signal || t;
+    };
+    const once = () => fetch(`${SKYBOT}?${q}`, { signal: sig() })
       .then(r => {
         if (!r.ok) throw new Error(`SkyBoT HTTP ${r.status}`);
         return r.text();
