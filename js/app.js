@@ -983,7 +983,7 @@ function drawLightcurve() {
   $('lcNote').textContent = !pts.length && sat
     ? 'This star is too bright: it saturates SPHEREx’s detector, so its brightness can’t be measured.'
     : !pts.length ? 'Not enough clean data around this point to measure it.'
-    : sat ? `${sat} visit${sat > 1 ? 's' : ''} skipped: pixels at the star’s centre were blank (saturated or flagged as bad).` : '';
+    : sat ? `${sat} visit${sat > 1 ? 's' : ''} skipped: pixels at the centre were blank (saturated or flagged as bad).` : '';
 }
 
 // ---------- spectrum ----------
@@ -1092,7 +1092,7 @@ function setProbe(i, j) {
   const [pra, pdec] = centreOf(currentFrame());
   const [ra, dec] = tanDeproject([pra * D2R, pdec * D2R], -(state.probe[0] - half) * s, (half - state.probe[1]) * s);
   $('lcWhere').textContent = state.track
-    ? `${state.probe[0] === Math.round(half) && state.probe[1] === Math.round(half) ? state.track.name : 'Point'} in the moving frame · ${DETECTORS[state.band].name} · aperture 15″ radius`
+    ? `${Math.abs(state.probe[0] - half) <= 1 && Math.abs(state.probe[1] - half) <= 1 ? state.track.name : 'Point'} in the moving frame · ${DETECTORS[state.band].name} · aperture 15″ radius`
     : `${formatRA(ra)} ${formatDec(dec)} · ${DETECTORS[state.band].name} · aperture 15″ radius`;
   drawOverlay();
   if (state.lcView === 'spectrum') measureSpectrum();
