@@ -502,7 +502,7 @@ function drawOverlay() {
   const n = state.size;
   const probe = state.probe
     ? `<circle cx="${((state.probe[0] + 0.5) / n) * 100}" cy="${((state.probe[1] + 0.5) / n) * 100}" r="${(3.5 / n) * 100}"
-        fill="none" stroke="rgba(255,162,92,0.95)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`
+        fill="none" stroke="#ffffff" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`
     : '';
   const ast = asteroidMarks() + trackOverlay() + (state.mark && currentFrame() === state.mark.frameRef
     ? `<circle cx="${((state.mark.x + 0.5) / n) * 100}" cy="${((state.mark.y + 0.5) / n) * 100}" r="${(5 / n) * 100}"
@@ -512,7 +512,7 @@ function drawOverlay() {
   // Leave ~5 px clear around the target so the marker never hides it.
   const g = Math.max(3, 500 / n), l = 6;
   svg.innerHTML = ast + probe + `
-    <g stroke="rgba(111,211,255,0.85)" stroke-width="0.35" vector-effect="non-scaling-stroke">
+    <g stroke="rgba(255,255,255,0.7)" stroke-width="0.35" vector-effect="non-scaling-stroke">
       <line x1="${50 - g - l}" y1="50" x2="${50 - g}" y2="50"/><line x1="${50 + g}" y1="50" x2="${50 + g + l}" y2="50"/>
       <line x1="50" y1="${50 - g - l}" x2="50" y2="${50 - g}"/><line x1="50" y1="${50 + g}" x2="50" y2="${50 + g + l}"/>
     </g>`;
@@ -564,7 +564,7 @@ function asteroidMarks() {
   return shown.map(o => `
     <g class="ast">
       <circle cx="${o.x}" cy="${o.y}" r="2.2" fill="none" stroke="#77e0b5" stroke-width="1.2" vector-effect="non-scaling-stroke"/>
-      <text x="${o.x + 2.8}" y="${o.y - 1.8}" fill="#77e0b5" font-size="2.6" font-family="Inter, sans-serif">${escapeHtml(o.name)} · V${o.vmag.toFixed(1)}</text>
+      <text x="${o.x + 2.8}" y="${o.y - 1.8}" fill="#77e0b5" font-size="2.6" font-family="system-ui, sans-serif">${escapeHtml(o.name)} · V${o.vmag.toFixed(1)}</text>
     </g>`).join('');
 }
 
@@ -1282,14 +1282,14 @@ function exportCanvas() {
 
 function stamp(g) {
   g.drawImage(canvas, 0, 0, EXPORT_PX, EXPORT_PX);
-  g.font = '500 20px Inter, sans-serif';
-  g.fillStyle = 'rgba(7,6,13,0.7)';
+  g.font = '500 20px system-ui, sans-serif';
+  g.fillStyle = 'rgba(0,0,0,0.6)';
   const label = $('hudDate').textContent;
   g.fillRect(12, 12, g.measureText(label).width + 20, 34);
-  g.fillStyle = '#ece9ff';
+  g.fillStyle = '#e6e6e6';
   g.fillText(label, 22, 36);
-  g.font = '13px Inter, sans-serif';
-  g.fillStyle = 'rgba(236,233,255,0.75)';
+  g.font = '13px system-ui, sans-serif';
+  g.fillStyle = 'rgba(230,230,230,0.75)';
   const credit = `SPHEREx ${DETECTORS[state.band].name} · ${state.target.name || ''} · NASA/JPL-Caltech/IPAC`;
   g.fillText(credit, 14, EXPORT_PX - 14);
 }
@@ -1353,7 +1353,7 @@ function renderBands() {
     b.style.setProperty('--c', d.color);
     b.disabled = !counts[k];
     b.setAttribute('aria-pressed', String(Number(k) === state.band));
-    b.innerHTML = `<span style="color:${d.color}">${d.name}</span><small>${d.range}</small><small>${counts[k] || 0} images</small>`;
+    b.innerHTML = `<span>${d.name}</span><small>${d.range}</small><small>${counts[k] || 0} images</small>`;
     b.onclick = () => { state.band = Number(k); renderBands(); loadBand(); };
     $('bands').appendChild(b);
   }

@@ -5,19 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SPHEREx Time-Lapse</title>
   <meta name="description" content="Watch the sky change in NASA SPHEREx images: time-lapse, blink and difference views of any spot on the sky.">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23120f24' stroke='%23ffa25c' stroke-width='2'/%3E%3Ccircle cx='11' cy='13' r='2' fill='%236fd3ff'/%3E%3Ccircle cx='20' cy='19' r='3' fill='%23ffa25c'/%3E%3C/svg%3E">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=20">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23111'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%23e6e6e6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css?v=21">
 </head>
 <body>
   <header class="top">
     <a class="brand" href="./">
-      <span class="logo" aria-hidden="true"></span>
-      <span>
-        <span class="title">SPHEREx Time-Lapse</span>
-        <span class="tag">Watch the infrared sky change between visits</span>
-      </span>
+      <span class="title">SPHEREx Time-Lapse</span>
+      <span class="tag">Watch the infrared sky change between visits</span>
     </a>
     <form id="search" class="search" autocomplete="off">
       <select id="searchMode" aria-label="What to look for">
@@ -33,9 +28,10 @@
   </header>
 
   <section id="intro" class="intro">
-    <h1>Every six months, SPHEREx photographs the whole sky in 102 colours of infrared light.</h1>
-    <p>Stars stay put. Asteroids, comets, nearby stars and variable objects don't. Pick a spot and
-      this tool lines up every SPHEREx picture of it so you can watch what moves.</p>
+    <h1>See how the sky changes in NASA SPHEREx images</h1>
+    <p>SPHEREx maps the whole sky every six months in 102 infrared colours. Search for a place or a
+      moving object, and this tool lines up every SPHEREx image of it so you can see what moved or
+      changed. Or start with one of these:</p>
     <div class="examples" id="examples"></div>
     <p class="stats mono" id="stats"></p>
   </section>
@@ -217,6 +213,6 @@
     </form>
   </dialog>
 
-  <script type="module" src="js/app.js?v=20"></script>
+  <script type="module" src="js/app.js?v=21"></script>
 </body>
 </html>
