@@ -118,6 +118,7 @@ function setLoading(text) {
   if (text) $('loadingText').textContent = text;
 }
 
+let handledUrl = location.href;
 function writeHash() {
   if (!state.target) return;
   const p = new URLSearchParams();
@@ -131,7 +132,18 @@ function writeHash() {
   p.set('band', state.band);
   p.set('fov', state.size);
   p.set('view', state.mode);
-  history.replaceState(null, '', '#' + p.toString());
+  const hash = '#' + p.toString();
+  if (hash === location.hash) return;
+  // A new target gets its own history entry so Back returns to the previous one;
+  // band, field and view changes just update the current entry.
+  if (hashTarget(location.hash) === hashTarget(hash)) history.replaceState(null, '', hash);
+  else history.pushState(null, '', hash);
+  handledUrl = location.href;
+}
+
+function hashTarget(hash) {
+  const p = new URLSearchParams(hash.replace(/^#/, ''));
+  return p.get('track') ? `track:${p.get('track')}` : p.has('ra') ? `${p.get('ra')},${p.get('dec')}` : p.get('name') || '';
 }
 
 // ---------- search & loading ----------
@@ -1550,6 +1562,33 @@ function fromHash() {
     lookAt(p.get('name'), opts);
   }
 }
+
+// Back/Forward, or a link pasted into an open tab.
+function onUrlChange() {
+  if (location.href === handledUrl) return; // popstate and hashchange both fire
+  handledUrl = location.href;
+  const want = new URLSearchParams(location.hash.slice(1));
+  if (!hashTarget(location.hash)) {
+    state.abort?.abort();
+    stop();
+    setLoading('');
+    state.target = null;
+    $('workspace').hidden = true;
+    $('intro').hidden = false;
+    $('q').value = '';
+    document.title = 'SPHEREx Time-Lapse';
+    return;
+  }
+  const cur = state.target && hashTarget('#' + new URLSearchParams(state.track
+    ? { track: state.track.query } : { ra: state.target.ra.toFixed(5), dec: state.target.dec.toFixed(5) }).toString());
+  const sameField = cur === hashTarget(location.hash)
+    && Number(want.get('band')) === state.band && Number(want.get('fov')) === state.size;
+  if (!sameField) { fromHash(); return; }
+  const m = want.get('view');
+  if (MODE_HINTS[m] && m !== state.mode) setMode(m);
+}
+window.addEventListener('popstate', onUrlChange);
+window.addEventListener('hashchange', onUrlChange);
 
 renderModes();
 renderSizes();
